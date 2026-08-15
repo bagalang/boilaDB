@@ -1,0 +1,86 @@
+// parse_colcon.baga — CREATE TABLE column constraints (P20-2):
+// NOT NULL / DEFAULT <literal> / DEFAULT now(), in any order.
+// Called after the column type; reports how many tokens it consumed.
+
+import "token.baga"
+import "lexer.baga"
+import "../catalog/ddl_types.baga"
+import "../core/value.baga"
+import "std/str/str.baga"
+
+struct BoilaColCon {
+    ok: i64,
+    advance: i64,   // tokens consumed after the type
+    flags: i64,
+    def: BoilaVal,
+    err: str,
+    state: str
+}
+
+fn boila_pcc_fail(msg: str, state: str) -> BoilaColCon {
+    return BoilaColCon { ok: 0, advance: 0, flags: 0, def: boila_val_null(), err: msg, state: state }
+}
+
+fn boila_pcc_tok(l: BoilaLex, i: i64) -> Token {
+    if i < vec_len(l.toks) {
+        return vec_get(l.toks, i)
+    }
+    return token_new(tok_eof(), "")
+}
+
+fn boila_parse_col_cons(l: BoilaLex, i0: i64, cname: str, typ: i64) -> BoilaColCon {
+    let mut i = i0
+    let mut flags: i64 = 0
+    let mut def = boila_val_null()
+    let mut go = true
+    while go {
+        let tk = boila_pcc_tok(l, i)
+        if tok_kw(tk, "not") == 1 && tok_kw(boila_pcc_tok(l, i + 1), "null") == 1 {
+            flags = flags + boila_cfl_notnull()
+            i = i + 2
+        } else {
+            if tok_kw(tk, "default") == 1 {
+                let dv = boila_pcc_tok(l, i + 1)
+                if dv.kind == tok_str() {
+                    if typ != boila_v_str() && typ != boila_v_json() && typ != boila_v_bytes() {
+                        return boila_pcc_fail(concat("DEFAULT стринг не съответства на типа на '", concat(cname, "'")), "42804")
+                    }
+                    def = boila_val_str(dv.txt)
+                    flags = flags + boila_cfl_hasdef()
+                    i = i + 2
+                } else {
+                    if dv.kind == tok_num() {
+                        if typ != boila_v_i64() && typ != boila_v_ts() && typ != boila_v_num() {
+                            return boila_pcc_fail(concat("DEFAULT число не съответства на типа на '", concat(cname, "'")), "42804")
+                        }
+                        def = boila_val_i64(parse_int(dv.txt))
+                        flags = flags + boila_cfl_hasdef()
+                        i = i + 2
+                    } else {
+                        if tok_kw(dv, "true") == 1 || tok_kw(dv, "false") == 1 {
+                            if typ != boila_v_bool() {
+                                return boila_pcc_fail(concat("DEFAULT true/false не съответства на типа на '", concat(cname, "'")), "42804")
+                            }
+                            def = boila_val_bool(tok_kw(dv, "true"))
+                            flags = flags + boila_cfl_hasdef()
+                            i = i + 2
+                        } else {
+                            if tok_kw(dv, "now") == 1 && boila_pcc_tok(l, i + 2).kind == tok_lparen() && boila_pcc_tok(l, i + 3).kind == tok_rparen() {
+                                if typ != boila_v_ts() {
+                                    return boila_pcc_fail(concat("DEFAULT now() изисква timestamptz колона '", concat(cname, "'")), "42804")
+                                }
+                                flags = flags + boila_cfl_defnow()
+                                i = i + 4
+                            } else {
+                                return boila_pcc_fail("DEFAULT поддържа литерал или now()", "0A000")
+                            }
+                        }
+                    }
+                }
+            } else {
+                go = false
+            }
+        }
+    }
+    return BoilaColCon { ok: 1, advance: i - i0, flags: flags, def: def, err: "", state: "" }
+}

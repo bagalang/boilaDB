@@ -2,10 +2,20 @@
 // Lived in sql/ast + sql/parse_alter; catalog consumes them so they sit
 // below sql/ (ARCHITECTURE §3 one-way deps).
 
+import "../core/value.baga"
+
+// Column flags (P20-2/P20-3), stored in the schema-row colflags tail.
+fn boila_cfl_notnull() -> i64 { return 1 }   // NOT NULL
+fn boila_cfl_hasdef() -> i64 { return 2 }   // DEFAULT literal (in def)
+fn boila_cfl_defnow() -> i64 { return 4 }    // DEFAULT now()
+fn boila_cfl_auto() -> i64 { return 8 }      // auto-number PK (P20-3)
+
 // Column type = value-model tag (i64/bool/str/bytes/json/ts/vector).
 struct BoilaColDef {
     name: str,
-    typ: i64
+    typ: i64,
+    flags: i64,     // P20-2: boila_cfl_* bits
+    def: BoilaVal   // P20-2: DEFAULT value when flags & hasdef
 }
 
 struct BoilaCreate {
@@ -25,7 +35,11 @@ struct BoilaAlter {
 }
 
 fn boila_coldef(name: str, typ: i64) -> BoilaColDef {
-    return BoilaColDef { name: name, typ: typ }
+    return BoilaColDef { name: name, typ: typ, flags: 0, def: boila_val_null() }
+}
+
+fn boila_coldef_c(name: str, typ: i64, flags: i64, def: BoilaVal) -> BoilaColDef {
+    return BoilaColDef { name: name, typ: typ, flags: flags, def: def }
 }
 
 fn boila_create_empty() -> BoilaCreate {

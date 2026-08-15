@@ -383,9 +383,23 @@ gaps of docs/sql.md one at a time.
   `sql/exec_insert_write.baga`, `sql/exec_modify.baga`.
   **Gate (passed):** `tests/boila_unique_test` — 20 checks (incl.
   same-txn buffer collision, delete-then-insert in one txn, restart).
-- **P20-2 — NOT NULL + DEFAULT.** Column constraints in CREATE TABLE;
-  DEFAULT literal or `now()`; INSERT omitting the column → default;
-  NULL into NOT NULL → `23502`.
+- **P20-2 — NOT NULL + DEFAULT (LANDED).** Column constraints in
+  CREATE TABLE after the type, any order: `NOT NULL`, `DEFAULT
+  <string|int|bool literal>`, `DEFAULT now()` (timestamptz only).
+  Type-checked at parse (mismatch → `42804`). INSERT applies defaults
+  to omitted columns before the NOT NULL check; NULL into NOT NULL →
+  `23502` on INSERT / UPDATE / ON CONFLICT DO UPDATE. Flags + default
+  value live in a second backward-compatible schema-row tail
+  `[ncf, (col_idx, flags, [def])*]`; every catalog rewrite path
+  preserves them. SHOW COLUMNS / SHOW CREATE TABLE render them.
+  Files: `catalog/ddl_types.baga` (flags on BoilaColDef),
+  `catalog/schema.baga`, `sql/parse_colcon.baga` (new),
+  `sql/parse_ddl.baga`, `sql/exec_dml.baga`, `sql/exec_insert.baga`,
+  `sql/exec_insert_write.baga`, `sql/exec_modify.baga`,
+  `sql/exec_show.baga`. Filesize split: the raw wipe helpers moved
+  schema.baga → catalog/drop.baga.
+  **Gate (passed):** `tests/boila_constraints_test` — 16 checks
+  (defaults, violations, type-mismatch refusal, SHOW, restart).
 - **P20-3 — BIGSERIAL.** Auto-number PRIMARY KEY (INSERT without the PK
   column → next value; per-table counter in the sys CF; RETURNING gives
   it back).

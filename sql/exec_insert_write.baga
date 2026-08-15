@@ -54,6 +54,11 @@ fn boila_insert_upsert(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ins: BoilaIn
         vec_set(new, vec_get(prep.ocix, c), boila_dml_coerce(cd.typ, v))
         c = c + 1
     }
+    // P20-2: NOT NULL проверка върху новия ред
+    let nnv = boila_dml_notnull_viol(t, new)
+    if nnv >= 0 {
+        return boila_insert_one_fail(s, txn, boila_dml_notnull_msg(t, nnv), "23502")
+    }
     // P20-1: UNIQUE проверка върху новия ред (преди del/put)
     let uc = boila_ix_uniq_check_txn(s, txn, t, new, pkenc)
     if uc.ok == 0 {

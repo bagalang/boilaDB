@@ -116,43 +116,43 @@ fn boila_cat_schema_row(t: BoilaTable) -> Vec<BoilaVal> {
         }
         i = i + 1
     }
+    // P20-2 tail: [ncf, (col_idx, flags, [def cell])*] — only flagged
+    // columns; pre-P20 rows have no tail and decode as flags=0.
+    let mut ncf: i64 = 0
+    i = 0
+    while i < vec_len(t.cols) {
+        if vec_get(t.cols, i).flags != 0 {
+            ncf = ncf + 1
+        }
+        i = i + 1
+    }
+    vec_push(sch, boila_val_i64(ncf))
+    i = 0
+    while i < vec_len(t.cols) {
+        let cd = vec_get(t.cols, i)
+        if cd.flags != 0 {
+            vec_push(sch, boila_val_i64(i))
+            vec_push(sch, boila_val_i64(cd.flags))
+            if (cd.flags & boila_cfl_hasdef()) == boila_cfl_hasdef() {
+                vec_push(sch, cd.def)
+            }
+        }
+        i = i + 1
+    }
     return sch
 }
 
+// P20-2: thin auto-commit wrapper (kept for the catalog unit test;
+// SQL DDL uses the txn variant directly).
 fn boila_cat_create(s: BoilaStore, cr: BoilaCreate) -> BoilaCatRes !IO !Time !Par {
-    // дубликат?
-    let dn = boila_get(s, boila_cf_sys(), 1, boila_cat_pk_name(cr.table))?
-    s = dn.s
-    if dn.found == 1 {
-        return BoilaCatRes { s: s, ok: 0, err: concat("таблица '", concat(cr.table, "' вече съществува")), state: "42P07", table: boila_cat_empty_table(), id: 0 }
+    let b = boila_txn_begin(s, boila_txn_new(), 0, "")?
+    let r = boila_cat_create_txn(b.s, b.txn, cr)?
+    if r.ok == 0 {
+        let rb = boila_txn_rollback_s(r.s, r.txn)?
+        return BoilaCatRes { s: rb.s, ok: 0, err: r.err, state: r.state, table: r.table, id: 0 }
     }
-    // следващо id
-    let dm = boila_get(s, boila_cf_sys(), 1, boila_cat_pk_meta())?
-    s = dm.s
-    let mut next: i64 = 1
-    if dm.found == 1 {
-        let mrow = boila_row_dec(dm.val)
-        if vec_len(mrow) > 0 {
-            let z = vec_get(mrow, 0)
-            next = z.i
-        }
-    }
-    let ixs0: Vec<BoilaIxMeta> = vec_new()
-    let t0 = BoilaTable { id: next, name: cr.table, cols: cr.cols, pk_idx: cr.pk_idx, ixs: ixs0, ttl_sec: cr.ttl_sec }
-    s = boila_put(s, boila_cf_sys(), 1, boila_cat_pk_schema(next), boila_row_enc(boila_cat_schema_row(t0)))?
-    // име → id
-    let idrow: Vec<BoilaVal> = vec_new()
-    vec_push(idrow, boila_val_i64(next))
-    s = boila_put(s, boila_cf_sys(), 1, boila_cat_pk_name(cr.table), boila_row_enc(idrow))?
-    // meta
-    let mrow2: Vec<BoilaVal> = vec_new()
-    vec_push(mrow2, boila_val_i64(next + 1))
-    s = boila_put(s, boila_cf_sys(), 1, boila_cat_pk_meta(), boila_row_enc(mrow2))?
-    // P9 TTL
-    if cr.ttl_sec > 0 {
-        s = boila_ttl_put(s, next, cr.ttl_sec)?
-    }
-    return BoilaCatRes { s: s, ok: 1, err: "", state: "", table: t0, id: next }
+    let c = boila_txn_commit(r.s, r.txn)?
+    return BoilaCatRes { s: c.s, ok: c.ok, err: c.err, state: c.state, table: r.table, id: r.id }
 }
 
 // T5: CREATE TABLE през txn buffer (rollback-able).
@@ -273,6 +273,27 @@ fn boila_cat_decode_schema(s: BoilaStore, name: str, id: i64, sch_row: bytes) ->
                 k2 = k2 + 1
             }
         }
+        // P20-2 colflags tail: [ncf, (col_idx, flags, [def cell])*].
+        if i < vec_len(sch) {
+            let ncf = vec_get(sch, i).i
+            i = i + 1
+            let mut k3: i64 = 0
+            while k3 < ncf && i + 1 < vec_len(sch) {
+                let cix2 = vec_get(sch, i).i
+                let fl = vec_get(sch, i + 1).i
+                i = i + 2
+                let mut dv = boila_val_null()
+                if (fl & boila_cfl_hasdef()) == boila_cfl_hasdef() && i < vec_len(sch) {
+                    dv = vec_get(sch, i)
+                    i = i + 1
+                }
+                if cix2 >= 0 && cix2 < vec_len(cols) {
+                    let oc = vec_get(cols, cix2)
+                    vec_set(cols, cix2, boila_coldef_c(oc.name, oc.typ, fl, dv))
+                }
+                k3 = k3 + 1
+            }
+        }
     }
     let tg = boila_ttl_get(s, id)?
     s = tg.s
@@ -355,45 +376,5 @@ fn boila_cat_by_name_txn(s: BoilaStore, txn: BoilaTxn, name: str) -> BoilaCatRes
     return res
 }
 
-// keys without txn (direct storage) for DROP / CF wipe.
-struct BoilaKeysRaw {
-    s: BoilaStore,
-    pks: Vec<bytes>
-}
-
-fn boila_cf_keys_raw(s: BoilaStore, cf: i64, table_id: i64) -> BoilaKeysRaw !IO !Time !Par {
-    let tk = boila_table_pks(s, cf, table_id)?
-    return BoilaKeysRaw { s: tk.s, pks: tk.pks }
-}
-
-fn boila_txn_keys_raw(s: BoilaStore, table_id: i64) -> BoilaKeysRaw !IO !Time !Par {
-    return boila_cf_keys_raw(s, boila_cf_data(), table_id)?
-}
-
-fn boila_cf_wipe(s: BoilaStore, cf: i64, table_id: i64) -> BoilaStore !IO !Time !Par {
-    let ks = boila_cf_keys_raw(s, cf, table_id)?
-    s = ks.s
-    let mut i: i64 = 0
-    while i < vec_len(ks.pks) {
-        s = boila_del(s, cf, table_id, vec_get(ks.pks, i))?
-        i = i + 1
-    }
-    return s
-}
-
-// Legacy data+name/schema only. Full wipe: catalog/drop.baga boila_table_drop.
-fn boila_cat_drop(s: BoilaStore, name: str) -> BoilaCatRes !IO !Time !Par {
-    let ct = boila_cat_by_name(s, name)?
-    s = ct.s
-    if ct.ok == 0 {
-        return ct
-    }
-    let t = ct.table
-    s = boila_cf_wipe(s, boila_cf_data(), t.id)?
-    s = boila_del(s, boila_cf_sys(), 1, boila_cat_pk_name(name))?
-    s = boila_del(s, boila_cf_sys(), 1, boila_cat_pk_schema(t.id))?
-    if t.ttl_sec > 0 {
-        s = boila_ttl_put(s, t.id, 0)?
-    }
-    return BoilaCatRes { s: s, ok: 1, err: "", state: "", table: t, id: t.id }
-}
+// BoilaKeysRaw / boila_cf_keys_raw / boila_txn_keys_raw / boila_cf_wipe
+// / boila_cat_drop moved to catalog/drop.baga at P20-2 (filesize §9).

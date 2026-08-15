@@ -11,6 +11,7 @@ import "../core/value.baga"
 import "../core/numeric.baga"
 import "../core/row.baga"
 import "../catalog/schema.baga"
+import "../catalog/ddl_types.baga"
 import "../index/secondary.baga"
 import "../fts/fts.baga"
 import "../vector/hnsw.baga"
@@ -175,5 +176,28 @@ fn boila_insert_prep_fail(s: BoilaStore, txn: BoilaTxn, msg: str, state: str) ->
 
 fn boila_insert_one_fail(s: BoilaStore, txn: BoilaTxn, msg: str, state: str) -> BoilaInsOne {
     return BoilaInsOne { s: s, txn: txn, ok: 0, err: msg, state: state, affected: 0, res: boila_result_empty() }
+}
+
+// P20-2: first NOT NULL column holding NULL in row, or -1.
+fn boila_dml_notnull_viol(t: BoilaTable, row: Vec<BoilaVal>) -> i64 {
+    let mut i: i64 = 0
+    while i < vec_len(t.cols) {
+        let cd = vec_get(t.cols, i)
+        if (cd.flags & boila_cfl_notnull()) == boila_cfl_notnull() {
+            if i < vec_len(row) && vec_get(row, i).tag == boila_v_null() {
+                return i
+            }
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn boila_dml_notnull_msg(t: BoilaTable, ix: i64) -> str {
+    let mut cn = "?"
+    if ix >= 0 && ix < vec_len(t.cols) {
+        cn = vec_get(t.cols, ix).name
+    }
+    return concat("NULL в NOT NULL колона '", concat(cn, "'"))
 }
 

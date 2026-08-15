@@ -7,6 +7,7 @@ import "../core/codec.baga"
 import "../core/value.baga"
 import "../core/row.baga"
 import "../catalog/schema.baga"
+import "../catalog/ddl_types.baga"
 import "../index/secondary.baga"
 import "../fts/fts.baga"
 import "../vector/hnsw.baga"
@@ -22,6 +23,7 @@ import "exec_proj.baga"
 import "exec_xw.baga"
 import "std/str/str.baga"
 import "std/bytes/bytes.baga"
+import "std/time/time.baga"
 
 // Колони → индекси (+ дубликат гард), pk слот, ON CONFLICT SET колони,
 // Q-oc-expr bind names (cols + excluded$col), RETURNING проекция.
@@ -139,6 +141,35 @@ fn boila_insert_one(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ins: BoilaIns, 
         }
         vec_set(full, vec_get(prep.cix, c), boila_dml_coerce(cd.typ, v))
         c = c + 1
+    }
+    // P20-2: DEFAULT-и за пропуснатите колони, после NOT NULL проверка
+    c = 0
+    while c < vec_len(t.cols) {
+        let cd = vec_get(t.cols, c)
+        if cd.flags != 0 {
+            let mut prov: i64 = 0
+            let mut j: i64 = 0
+            while j < vec_len(prep.cix) {
+                if vec_get(prep.cix, j) == c {
+                    prov = 1
+                }
+                j = j + 1
+            }
+            if prov == 0 {
+                if (cd.flags & boila_cfl_defnow()) == boila_cfl_defnow() {
+                    vec_set(full, c, boila_val_ts(time_now_ms()? * 1000))
+                } else {
+                    if (cd.flags & boila_cfl_hasdef()) == boila_cfl_hasdef() {
+                        vec_set(full, c, boila_dml_coerce(cd.typ, cd.def))
+                    }
+                }
+            }
+        }
+        c = c + 1
+    }
+    let nnv = boila_dml_notnull_viol(t, full)
+    if nnv >= 0 {
+        return boila_insert_one_fail(s, txn, boila_dml_notnull_msg(t, nnv), "23502")
     }
     let pkval = vec_get(tuple, prep.pk_slot)
     if pkval.tag == boila_v_null() {

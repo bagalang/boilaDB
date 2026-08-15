@@ -31,9 +31,9 @@ uses the secondary index when present.
 **P12:** `NUMERIC` / `DECIMAL` (unconstrained; bagadecimal). Insert
 via text (`'12.50'`) or bigint; `CAST` / `::numeric`.
 
-**Not yet:** `SERIAL` / `BIGSERIAL`, `DEFAULT`, `NOT NULL`,
-`REFERENCES`, arrays, usable `FLOAT8` columns, `NUMERIC(p,s)`
-enforcement, unquoted `12.50` literals.
+**Not yet:** `SERIAL` / `BIGSERIAL`, `REFERENCES`, arrays, usable
+`FLOAT8` columns, `NUMERIC(p,s)` enforcement, unquoted `12.50`
+literals, `CHECK` constraints.
 
 Every `CREATE TABLE` requires a `PRIMARY KEY`.
 
@@ -65,7 +65,9 @@ CREATE FOREIGN TABLE t SERVER name;   -- t → other.t
 ```sql
 CREATE TABLE [IF NOT EXISTS] t (
   id    BIGINT,
-  name  TEXT,
+  name  TEXT NOT NULL,
+  kind  TEXT NOT NULL DEFAULT 'std',
+  ts    TIMESTAMPTZ DEFAULT now(),
   body  TEXT,
   PRIMARY KEY (id)
 ) [WITH (ttl_days = N | ttl_sec = N)];
@@ -97,6 +99,14 @@ are distinct (many NULL rows are allowed, as in PostgreSQL). Creating a
 unique index on a column that already contains duplicates fails with
 `23505` and rolls back. `UNIQUE` is not accepted with `USING hnsw`.
 Single-column only.
+
+**Column constraints (P20-2):** `NOT NULL` and `DEFAULT` follow the
+column type in any order. `DEFAULT` accepts a string / integer /
+boolean literal matching the column type, or `now()` on a
+`timestamptz` column (type mismatch → `42804` at CREATE). INSERT fills
+omitted columns with their defaults before checking `NOT NULL`; a NULL
+in a NOT NULL column → `23502` (also on UPDATE / `ON CONFLICT DO
+UPDATE`). `ALTER TABLE ADD COLUMN` remains nullable-only.
 
 `TABLE t [WHERE …] [ORDER BY …] [LIMIT …]` is sugar for
 `SELECT * FROM t …`.

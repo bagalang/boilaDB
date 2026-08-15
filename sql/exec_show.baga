@@ -4,6 +4,7 @@ import "lexer.baga"
 import "plan_cache.baga"
 import "exec_out.baga"
 import "../catalog/schema.baga"
+import "../catalog/ddl_types.baga"
 import "../catalog/drop.baga"
 import "../core/codec.baga"
 import "../core/value.baga"
@@ -14,6 +15,21 @@ import "../txn/mvcc.baga"
 import "../storage/shards.baga"
 import "std/str/str.baga"
 import "std/bytes/bytes.baga"
+
+// P20-2: DEFAULT literal rendering for SHOW CREATE TABLE.
+fn boila_show_def_lit(v: BoilaVal) -> str {
+    if v.tag == boila_v_str() {
+        return concat(concat("'", str_of_bytes(v.b)), "'")
+    }
+    if v.tag == boila_v_i64() || v.tag == boila_v_ts() {
+        return int_to_str(v.i)
+    }
+    if v.tag == boila_v_bool() {
+        if v.i == 1 { return "true" }
+        return "false"
+    }
+    return "?"
+}
 
 fn boila_type_name(typ: i64) -> str {
     if typ == boila_v_bool() { return "boolean" }
@@ -48,12 +64,15 @@ fn boila_show_columns(s: BoilaStore, txn: BoilaTxn, pc: BoilaPlanCache, table: s
         let row: Vec<BoilaVal> = vec_new()
         vec_push(row, boila_val_str(c.name))
         vec_push(row, boila_val_str(boila_type_name(c.typ)))
-        // all cols nullable except we don't track NOT NULL; PK still "YES" nullable flag false-ish
-        if i == t.pk_idx {
+        // P20-2: NOT NULL tracked per column; PK implies NOT NULL.
+        if i == t.pk_idx || (c.flags & boila_cfl_notnull()) == boila_cfl_notnull() {
             vec_push(row, boila_val_str("NO"))
-            vec_push(row, boila_val_str("YES"))
         } else {
             vec_push(row, boila_val_str("YES"))
+        }
+        if i == t.pk_idx {
+            vec_push(row, boila_val_str("YES"))
+        } else {
             vec_push(row, boila_val_str("NO"))
         }
         vec_push(res.rows, row)
@@ -250,6 +269,16 @@ fn boila_show_create_table(s: BoilaStore, txn: BoilaTxn, pc: BoilaPlanCache, tab
         if i > 0 { ddl = concat(ddl, ", ") }
         let c = vec_get(t.cols, i)
         ddl = concat(ddl, concat(concat(c.name, " "), boila_type_name(c.typ)))
+        if (c.flags & boila_cfl_notnull()) == boila_cfl_notnull() {
+            ddl = concat(ddl, " NOT NULL")
+        }
+        if (c.flags & boila_cfl_defnow()) == boila_cfl_defnow() {
+            ddl = concat(ddl, " DEFAULT now()")
+        } else {
+            if (c.flags & boila_cfl_hasdef()) == boila_cfl_hasdef() {
+                ddl = concat(ddl, concat(" DEFAULT ", boila_show_def_lit(c.def)))
+            }
+        }
         i = i + 1
     }
     if t.pk_idx >= 0 && t.pk_idx < vec_len(t.cols) {

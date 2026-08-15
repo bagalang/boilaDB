@@ -21,7 +21,16 @@ T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
   per DML row (same cost class as an indexed eq SELECT — the K7-safe
   path, not a full scan); multi-column unique not supported
   (single-column indexes only, same as plain CREATE INDEX).
-- **U2 — NOT NULL + DEFAULT (P20-2, pending).**
+- **U2 — (FIXED P20-2) NOT NULL + DEFAULT.** Per-column flags +
+  default value in a schema-row tail (`[ncf, (col_idx, flags,
+  [def])*]`, pre-P20 rows decode flags=0). DEFAULT literals are
+  type-checked at parse; INSERT fills omitted columns, then the NOT
+  NULL check (23502) runs on INSERT/UPDATE/upsert. Gate:
+  `tests/boila_constraints_test` 16/16 incl. restart. Residual: ALTER
+  TABLE ADD COLUMN stays nullable-only (no DEFAULT on add); no
+  `DEFAULT` expressions other than `now()`; CHECK constraints not
+  supported; NUMERIC defaults only from int literals (unquoted `12.50`
+  still absent from the lexer, per N1).
 - **U3 — BIGSERIAL (P20-3, pending).**
 - **U4 — sum/avg over NUMERIC (P20-4 = P12b, pending).**
 - **U5 — to_char(timestamptz, fmt) (P20-5, pending).**

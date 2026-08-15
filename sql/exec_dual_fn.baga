@@ -123,6 +123,10 @@ fn boila_dual_call_simple(fnm: str, has_arg: i64, arg: str, db: str, guc: Map<st
     }
     if fnm == "pg_is_in_recovery" {
         if has_arg == 1 { return boila_dual_fail_ex(pos, "pg_is_in_recovery() без аргументи", "42883") }
+        let rec = boila_guc_get(guc, "in_recovery")
+        if rec == "on" {
+            return boila_dual_ok(boila_val_bool(1), boila_v_bool(), fnm, pos)
+        }
         return boila_dual_ok(boila_val_bool(0), boila_v_bool(), fnm, pos)
     }
     if fnm == "pg_backend_pid" {

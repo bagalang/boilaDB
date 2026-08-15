@@ -1,0 +1,70 @@
+// cluster.baga — in-process 3-node boilaDB + raftbaga (P19).
+
+import "raftbaga/cluster.baga"
+import "raftbaga/msg.baga"
+import "raftbaga/node.baga"
+import "../server/databases.baga"
+import "../server/exec_server.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+
+extern fn mkdir(path: str, mode: i64) -> i64 !IO
+
+struct BoilaRepl {
+    raft: RaftCluster,
+    n: i64,
+    live: Vec<i64>,
+    ok: i64
+}
+
+fn boila_repl_root(root: str, id: i64) -> str {
+    return concat(concat(root, "/n"), int_to_str(id))
+}
+
+fn boila_repl_start(root: str) -> BoilaRepl !IO !Time !Par {
+    mkdir(root, 493)?
+    let live: Vec<i64> = vec_new()
+    let mut i: i64 = 0
+    while i < 3 {
+        vec_push(live, 1)
+        mkdir(boila_repl_root(root, i), 493)?
+        i = i + 1
+    }
+    let raft = raft_start()?
+    return BoilaRepl { raft: raft, n: 3, live: live, ok: raft.ok }
+}
+
+fn boila_repl_leader(r: BoilaRepl) -> i64 !Par {
+    let mut i: i64 = 0
+    while i < r.n {
+        if vec_get(r.live, i) == 1 {
+            let reply = chan_new(1)
+            chan_send(peer_ch(r.raft.peers, i), msg_role(reply))
+            let rr = chan_recv_timeout(reply, 250)
+            chan_close(reply)
+            if cell2_0(rr) == 1 {
+                if reply_is_ok(cell2_1(rr)) == 1 && reply_val(cell2_1(rr)) == 2 {
+                    return i
+                }
+            }
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn boila_repl_kill(r: BoilaRepl, id: i64) -> BoilaRepl !Par {
+    if id >= 0 && id < r.n {
+        vec_set(r.live, id, 0)
+        raft_kill(r.raft, id)?
+    }
+    return r
+}
+
+fn boila_repl_stop(r: BoilaRepl) -> i64 !Par {
+    return raft_stop(r.raft)?
+}
+
+fn boila_repl_open_node(root: str, id: i64) -> BoilaServer !IO !Time !Par {
+    return boila_server_open(boila_repl_root(root, id), 1, 8, 3, 4)?
+}

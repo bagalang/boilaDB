@@ -300,7 +300,8 @@ cell2 пакети (доказаният модел на rocksbaga MT и queueba
 
 ## 8. Граници на v1 (честно)
 
-- Един възел до P19. P19 = raftbaga commit-log репликация (N=3
+- P19 = in-process raftbaga replica (N=3): leader SQL + LSN ticket,
+  follower replay; `pg_is_in_recovery` / write `25006`.
   in-process първо; TCP по-късно). N shard-а остават вътрешни.
 - Много бази на сървъра; сесия = една база за писане. `db.table` четене
   и локален FDW — P18. Cross-db транзакция/2PC — не.

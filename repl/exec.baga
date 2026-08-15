@@ -1,0 +1,74 @@
+// exec.baga — SQL on one replica node; leader replicates write SQL.
+
+import "cluster.baga"
+import "../server/databases.baga"
+import "../server/exec_server.baga"
+import "../sql/lexer.baga"
+import "../sql/token.baga"
+import "../sql/exec_scan.baga"
+import "../txn/mvcc.baga"
+import "raftbaga/cluster.baga"
+import "std/str/str.baga"
+
+fn boila_repl_sql_write(sql: str) -> i64 {
+    let lx = boila_lex(sql)
+    if lx.err != "" || vec_len(lx.toks) == 0 {
+        return 0
+    }
+    let t0 = vec_get(lx.toks, 0)
+    if tok_kw(t0, "insert") == 1 { return 1 }
+    if tok_kw(t0, "update") == 1 { return 1 }
+    if tok_kw(t0, "delete") == 1 { return 1 }
+    if tok_kw(t0, "create") == 1 { return 1 }
+    if tok_kw(t0, "drop") == 1 { return 1 }
+    if tok_kw(t0, "alter") == 1 { return 1 }
+    if tok_kw(t0, "truncate") == 1 { return 1 }
+    if tok_kw(t0, "copy") == 1 { return 1 }
+    return 0
+}
+
+fn boila_repl_exec(r: BoilaRepl, root: str, nid: i64, sql: str) -> BoilaSrvOut !IO !Time !Par {
+    if nid < 0 || nid >= r.n || vec_get(r.live, nid) == 0 {
+        let srv = boila_server_open(boila_repl_root(root, 0), 1, 8, 3, 4)?
+        let o = boila_srv_out_fail(srv, boila_txn_new(), "replica node is down", "08006")
+        return o
+    }
+    let lid = raft_leader_id(r.raft)?
+    let mut rec: i64 = 0
+    if lid >= 0 && nid != lid {
+        rec = 1
+    }
+    if boila_repl_sql_write(sql) == 1 && rec == 1 {
+        let srv = boila_repl_open_node(root, nid)?
+        let o = boila_srv_out_fail(srv, boila_txn_new(), "cannot execute WRITE in a read-only transaction", "25006")
+        boila_server_close(srv)?
+        return o
+    }
+    let mut srv = boila_repl_open_node(root, nid)?
+    if rec == 1 {
+        map_set(srv.guc, "in_recovery", "on")
+    } else {
+        map_set(srv.guc, "in_recovery", "off")
+    }
+    let out = boila_server_exec(srv, "boila", sql)?
+    srv = out.srv
+    if out.ok == 1 && boila_repl_sql_write(sql) == 1 && rec == 0 {
+        let mut ticket = out.id
+        if ticket < 1 {
+            ticket = 1
+        }
+        raft_put(r.raft, ticket, 1)?
+        let mut i: i64 = 0
+        while i < r.n {
+            if i != nid && vec_get(r.live, i) == 1 {
+                let mut fs = boila_repl_open_node(root, i)?
+                let fo = boila_server_exec(fs, "boila", sql)?
+                fs = fo.srv
+                boila_server_close(fs)?
+            }
+            i = i + 1
+        }
+    }
+    boila_server_close(srv)?
+    return out
+}

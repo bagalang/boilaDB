@@ -21,8 +21,9 @@ T = транзакции, W = wire protocol, F = FTS.
   Residual: no binary/file/HEADER; COPY FROM MT pool → 0A000.
 - **N4 — (FIXED P15) SCRAM-SHA-256.** s1 verifier; auto SASL; live
   pgbaga. Residual: no PLUS/TLS/MD5.
-- **N5 — (P16–P18 FIXED) filter-GC / SSI-lite / local FDW.** raft
-  остава P19. Residual: няма 2PC; няма remote FDW.
+- **N5 — (P16–P19 FIXED) filter-GC / SSI-lite / local FDW / raft
+  replica.** Residual: N=3 in-process; SQL replay не WAL bytes;
+  няма 2PC; няма remote FDW.
 
 ## Открити 2026-08-13 (ormbaga live + `--rc` serve_pg)
 

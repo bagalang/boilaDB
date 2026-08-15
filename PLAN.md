@@ -350,19 +350,18 @@ P2 вече държи много бази в един процес, но сес
 ## P19 — raftbaga репликация
 
 raftbaga днес е **фрагмент** (N=3 in-process, i64 KV, без pre-vote /
-snapshots / membership). Репликацията на boilaDB е **WAL/LSN batch**,
-не KV put.
+snapshots / membership). Репликацията на boilaDB е **commit SQL +
+LSN ticket** в raft log, не суров KV put.
 
-- Първи разрез: in-process 3 възела; лидерът прилага commit LSN
-  batch към raft log; follower-ите replay-ват същия batch в своя
-  store. `pg_is_in_recovery()` = 1 на follower; писане там → `25006`.
-- Транспорт: канали (като днешния raftbaga). TCP между процеси —
-  след като in-process гейтът мине.
-- **Гейт:** kill лидера → избор; committed редове се четат на новия
-  лидер; uncommitted buffer се губи (като P4 crash).
-- Residual: N=3 фиксирано; няма dynamic membership; няма sync
-  replica за `synchronous_commit`; raftbaga safety не е доказана
-  (`--verify` само на local rules).
+- In-process 3 възела (`repl/`); лидерът изпълнява SQL, `raft_put`
+  записва LSN ticket, follower-ите replay-ват същото заявление.
+  `pg_is_in_recovery()` = 1 на follower; писане там → `25006`.
+- Транспорт: канали (raftbaga). TCP между процеси — следващ разрез.
+- **Гейт (минат):** `tests/boila_repl_test` — kill лидера → избор;
+  committed ред се чете на новия лидер; uncommitted buffer се губи.
+- Residual: N=3 фиксирано; replay е SQL, не WAL bytes; няма
+  dynamic membership; няма `synchronous_commit`; raft safety не е
+  доказана (`--verify` само на local rules).
 
 ## Рискове
 - **`go/chan` само `i64`** → комуникация с shard нишките през канали +

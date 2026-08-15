@@ -123,7 +123,8 @@ No upward imports. Prefixes (`boila_*`, `sql_*`, `vec_*`, `fts_*`,
 
 ## v1 limits (honest)
 
-- One node. Shards are in-process, not networked. No raft / replica.
+- Default is one node. P19: in-process 3-node raft replica
+  (`repl/`); followers are read-only (`25006`). No TCP yet.
 - No cross-database queries or transactions.
 - No Geo/GPS — not on the roadmap.
 - P12 `NUMERIC`, P13 window, P14 `COPY`, P15 SCRAM. Still no

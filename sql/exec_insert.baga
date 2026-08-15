@@ -8,6 +8,7 @@ import "../core/value.baga"
 import "../core/row.baga"
 import "../catalog/schema.baga"
 import "../catalog/ddl_types.baga"
+import "../catalog/sequence.baga"
 import "../index/secondary.baga"
 import "../fts/fts.baga"
 import "../vector/hnsw.baga"
@@ -55,7 +56,9 @@ fn boila_insert_prep(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ins: BoilaIns)
         }
         i = i + 1
     }
-    if pk_slot < 0 {
+    // P20-3: auto-number (SERIAL) PK може да липсва в INSERT
+    let pk_auto = (vec_get(t.cols, t.pk_idx).flags & boila_cfl_auto()) == boila_cfl_auto()
+    if pk_slot < 0 && pk_auto == 0 {
         return boila_insert_prep_fail(s, txn, "PRIMARY KEY колона липсва в INSERT", "23502")
     }
     // ON CONFLICT SET колони
@@ -167,11 +170,24 @@ fn boila_insert_one(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ins: BoilaIns, 
         }
         c = c + 1
     }
+    // P20-3: авто-номер за пропуснат SERIAL PK (преди NOT NULL проверката)
+    let mut pkval = boila_val_null()
+    if prep.pk_slot >= 0 {
+        pkval = vec_get(tuple, prep.pk_slot)
+    } else {
+        let sq = boila_seq_next_txn(s, txn, t.id)?
+        s = sq.s
+        txn = sq.txn
+        if sq.ok == 0 {
+            return boila_insert_one_fail(s, txn, sq.err, sq.state)
+        }
+        pkval = boila_val_i64(sq.val)
+        vec_set(full, t.pk_idx, pkval)
+    }
     let nnv = boila_dml_notnull_viol(t, full)
     if nnv >= 0 {
         return boila_insert_one_fail(s, txn, boila_dml_notnull_msg(t, nnv), "23502")
     }
-    let pkval = vec_get(tuple, prep.pk_slot)
     if pkval.tag == boila_v_null() {
         return boila_insert_one_fail(s, txn, "NULL в PRIMARY KEY", "23502")
     }

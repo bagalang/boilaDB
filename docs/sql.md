@@ -31,9 +31,12 @@ uses the secondary index when present.
 **P12:** `NUMERIC` / `DECIMAL` (unconstrained; bagadecimal). Insert
 via text (`'12.50'`) or bigint; `CAST` / `::numeric`.
 
-**Not yet:** `SERIAL` / `BIGSERIAL`, `REFERENCES`, arrays, usable
-`FLOAT8` columns, `NUMERIC(p,s)` enforcement, unquoted `12.50`
-literals, `CHECK` constraints.
+**P20-3:** `SERIAL` / `BIGSERIAL` — auto-number PRIMARY KEY (bigint
+underneath; the column must be the `PRIMARY KEY`).
+
+**Not yet:** `REFERENCES`, arrays, usable `FLOAT8` columns,
+`NUMERIC(p,s)` enforcement, unquoted `12.50` literals, `CHECK`
+constraints.
 
 Every `CREATE TABLE` requires a `PRIMARY KEY`.
 
@@ -107,6 +110,14 @@ boolean literal matching the column type, or `now()` on a
 omitted columns with their defaults before checking `NOT NULL`; a NULL
 in a NOT NULL column → `23502` (also on UPDATE / `ON CONFLICT DO
 UPDATE`). `ALTER TABLE ADD COLUMN` remains nullable-only.
+
+**SERIAL / BIGSERIAL (P20-3):** an auto-number PRIMARY KEY. INSERT
+that omits the column gets the next per-table counter value
+(`RETURNING` shows it); multi-row INSERTs take consecutive values.
+The counter rides the transaction buffer — a ROLLBACK gives the number
+back (unlike PostgreSQL sequences). Explicit values are allowed and do
+not advance the counter. A SERIAL column must be the PRIMARY KEY
+(`0A000` otherwise) and cannot carry a DEFAULT (`42601`).
 
 `TABLE t [WHERE …] [ORDER BY …] [LIMIT …]` is sugar for
 `SELECT * FROM t …`.

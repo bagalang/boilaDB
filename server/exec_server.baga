@@ -7,6 +7,7 @@
 import "../sql/lexer.baga"
 import "../sql/token.baga"
 import "../sql/parse_ddl.baga"
+import "../sql/parse_db.baga"
 import "../sql/exec_sql.baga"
 import "../sql/parse_select.baga"
 import "../sql/exec_xdb.baga"

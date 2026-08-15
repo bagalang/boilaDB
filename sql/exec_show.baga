@@ -268,7 +268,11 @@ fn boila_show_create_table(s: BoilaStore, txn: BoilaTxn, pc: BoilaPlanCache, tab
     while i < vec_len(t.cols) {
         if i > 0 { ddl = concat(ddl, ", ") }
         let c = vec_get(t.cols, i)
-        ddl = concat(ddl, concat(concat(c.name, " "), boila_type_name(c.typ)))
+        let mut tnm = boila_type_name(c.typ)
+        if (c.flags & boila_cfl_auto()) == boila_cfl_auto() {
+            tnm = "bigserial"
+        }
+        ddl = concat(ddl, concat(concat(c.name, " "), tnm))
         if (c.flags & boila_cfl_notnull()) == boila_cfl_notnull() {
             ddl = concat(ddl, " NOT NULL")
         }

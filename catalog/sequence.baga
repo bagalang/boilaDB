@@ -1,0 +1,58 @@
+// sequence.baga — per-table auto-number counters (P20-3 BIGSERIAL).
+//
+// Counter key: sys CF, table_id=1, pk "q|<table_id>" → row [next].
+// Allocation goes through the txn buffer, so a multi-row INSERT takes
+// consecutive values and a ROLLBACK gives them back (the counter row
+// is buffered like any other write). Concurrent sessions are serialized
+// by the per-database data lock (P11-1b).
+
+import "../storage/shards.baga"
+import "../core/value.baga"
+import "../core/row.baga"
+import "../txn/mvcc.baga"
+import "std/str/str.baga"
+import "std/bytes/bytes.baga"
+
+struct BoilaSeqRes {
+    s: BoilaStore,
+    txn: BoilaTxn,
+    ok: i64,
+    err: str,
+    state: str,
+    val: i64
+}
+
+fn boila_seq_pk(table_id: i64) -> bytes {
+    return bytes_of_str(concat("q|", int_to_str(table_id)))
+}
+
+fn boila_seq_next_txn(s: BoilaStore, txn: BoilaTxn, table_id: i64) -> BoilaSeqRes !IO !Time !Par {
+    let pk = boila_seq_pk(table_id)
+    let mut next: i64 = 1
+    let bix = boila_txn_find(txn, boila_cf_sys(), 1, pk)
+    if bix >= 0 {
+        let w = vec_get(txn.writes, bix)
+        if w.is_del == 0 {
+            let row = boila_row_dec(w.row)
+            if vec_len(row) > 0 {
+                next = vec_get(row, 0).i
+            }
+        }
+    } else {
+        let g = boila_get(s, boila_cf_sys(), 1, pk)?
+        s = g.s
+        if g.found == 1 {
+            let row = boila_row_dec(g.val)
+            if vec_len(row) > 0 {
+                next = vec_get(row, 0).i
+            }
+        }
+    }
+    let nrow: Vec<BoilaVal> = vec_new()
+    vec_push(nrow, boila_val_i64(next + 1))
+    let r = boila_txn_put(s, txn, boila_cf_sys(), 1, pk, boila_row_enc(nrow))
+    if r.ok == 0 {
+        return BoilaSeqRes { s: s, txn: r.txn, ok: 0, err: r.err, state: r.state, val: 0 }
+    }
+    return BoilaSeqRes { s: s, txn: r.txn, ok: 1, err: "", state: "", val: next }
+}

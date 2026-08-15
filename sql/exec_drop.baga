@@ -4,6 +4,7 @@
 import "token.baga"
 import "lexer.baga"
 import "parse_ddl.baga"
+import "parse_db.baga"
 import "parse_index.baga"
 import "plan_cache.baga"
 import "exec_out.baga"

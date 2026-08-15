@@ -31,7 +31,15 @@ T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
   `DEFAULT` expressions other than `now()`; CHECK constraints not
   supported; NUMERIC defaults only from int literals (unquoted `12.50`
   still absent from the lexer, per N1).
-- **U3 — BIGSERIAL (P20-3, pending).**
+- **U3 — (FIXED P20-3) BIGSERIAL.** SERIAL/BIGSERIAL = bigint + auto
+  flag on the PK; per-table counter `q|<tid>` allocated through the
+  txn buffer (multi-row gets consecutive ids; ROLLBACK returns the
+  number — unlike PG sequences; explicit ids do not advance it). Gate:
+  `tests/boila_bigserial_test` 15/15 incl. restart. Residual: counter
+  is not transaction-independent (PG seq scans are); no `nextval` /
+  standalone `CREATE SEQUENCE`; DROP TABLE leaves the counter key
+  (same policy as the `m|next_*` globals, P11-3); SERIAL must be the
+  PK (no auto non-PK columns).
 - **U4 — sum/avg over NUMERIC (P20-4 = P12b, pending).**
 - **U5 — to_char(timestamptz, fmt) (P20-5, pending).**
 - **U6 — apps/invoices gate (P20-6, pending).**

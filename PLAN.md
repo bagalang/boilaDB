@@ -400,9 +400,21 @@ gaps of docs/sql.md one at a time.
   schema.baga → catalog/drop.baga.
   **Gate (passed):** `tests/boila_constraints_test` — 16 checks
   (defaults, violations, type-mismatch refusal, SHOW, restart).
-- **P20-3 — BIGSERIAL.** Auto-number PRIMARY KEY (INSERT without the PK
-  column → next value; per-table counter in the sys CF; RETURNING gives
-  it back).
+- **P20-3 — BIGSERIAL (LANDED).** `SERIAL` / `BIGSERIAL` column type =
+  bigint + auto flag; the column must be the PRIMARY KEY (`0A000`
+  otherwise) and takes no DEFAULT (`42601`). INSERT omitting the PK
+  allocates the next value from a per-table counter (sys CF key
+  `q|<table_id>`), visible to RETURNING. The counter write rides the
+  txn buffer: multi-row INSERTs take consecutive ids and ROLLBACK
+  gives the number back (unlike PG sequences — documented). Explicit
+  ids do not advance the counter. SHOW CREATE TABLE renders
+  `bigserial`. Files: `catalog/sequence.baga` (new),
+  `sql/parse_ddl.baga`, `sql/exec_insert.baga`, `sql/exec_show.baga`.
+  Filesize split: the DB-level parsers moved parse_ddl.baga →
+  `sql/parse_db.baga`.
+  **Gate (passed):** `tests/boila_bigserial_test` — 15 checks
+  (consecutive ids, explicit ids, per-table counters, rollback reuse,
+  refusal cases, restart).
 - **P20-4 — sum/avg over NUMERIC (P12b).** Decimal aggregates for
   accounting totals.
 - **P20-5 — to_char(timestamptz, fmt).** Dates on invoices.

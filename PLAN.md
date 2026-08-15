@@ -363,12 +363,13 @@ LSN ticket** в raft log, не суров KV put.
   dynamic membership; няма `synchronous_commit`; raft safety не е
   доказана (`--verify` само на local rules).
 
-## P20 — Application readiness (invoicing probe)
+## P20 — Application readiness
 
-Goal: the SQL surface a real application cannot do without. The probe
-application is an invoicing program (`apps/invoices`, P20-6): numbered
-invoices, NUMERIC money, dates, PDF. The sub-phases close the "Not yet"
-gaps of docs/sql.md one at a time.
+Goal: the general-purpose SQL surface an application layer needs —
+constraints, auto-number keys, decimal aggregates, date/time formatting.
+Every sub-phase is application-agnostic; concrete programs are built in
+their own packages (see `apps/`) on top of this surface. The sub-phases
+close the "Not yet" gaps of docs/sql.md one at a time.
 
 - **P20-1 — UNIQUE indexes (LANDED).** `CREATE UNIQUE INDEX name ON
   t (col)`; a duplicate non-NULL value → `23505` on INSERT / UPDATE /
@@ -415,8 +416,8 @@ gaps of docs/sql.md one at a time.
   **Gate (passed):** `tests/boila_bigserial_test` — 15 checks
   (consecutive ids, explicit ids, per-table counters, rollback reuse,
   refusal cases, restart).
-- **P20-4 — sum/avg over NUMERIC (P12b, LANDED).** Decimal aggregates
-  for accounting totals. `SUM`/`AVG` accept a NUMERIC column (or a
+- **P20-4 — sum/avg over NUMERIC (P12b, LANDED).** Decimal-exact
+  aggregates over NUMERIC. `SUM`/`AVG` accept a NUMERIC column (or a
   numeric-valued expression) and accumulate in a per-slot bagadecimal
   payload (`BoilaAggAcc.nsum`, empty for i64 slots); `AVG` divides by
   the count at emit time (`dec_div`, scale ≥ 6). The output column is
@@ -430,7 +431,7 @@ gaps of docs/sql.md one at a time.
   Residual: decimal overflow keeps the prior accumulator (no SQLSTATE);
   HAVING predicates carry integer literals, so HAVING over a numeric
   aggregate is not useful yet.
-- **P20-5 — to_char(timestamptz, fmt) (LANDED).** Dates on invoices.
+- **P20-5 — to_char(timestamptz, fmt) (LANDED).** Date/time formatting.
   `to_char(ts, fmt)` formats a timestamptz (i64 µs) to text. Tokens:
   `YYYY MM DD HH24 HH12 HH MI SS`; anything else copies through
   literally (UTF-8 aware). Civil-date breakdown is the all-integer
@@ -443,8 +444,10 @@ gaps of docs/sql.md one at a time.
   next-day, HH24:MI:SS, leap-day 29/02/1972, DD/MM/YYYY, dual now()).
   Residual: no `Mon`/`Month`/`Day` names, no `US`/`TZ` fields, no
   locale; numeric `to_char` not supported (timestamptz only).
-- **P20-6 — apps/invoices (gate).** Schema clients/invoices/items;
-  numbering + totals + PDF over the PG wire client.
+
+With P20-1…P20-5 the dialect covers the general building blocks an
+application schema needs. Concrete applications are separate packages
+and are not tracked in this plan.
 
 ## Рискове
 - **`go/chan` само `i64`** → комуникация с shard нишките през канали +

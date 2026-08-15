@@ -5,7 +5,7 @@ V = value/codec/vector, K = key/scan, S = storage, M = metrics/monitoring,
 H = HTTP/API, Q = SQL (от P1), C = cache/planner, A = агрегати,
 T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
 
-## P20 — app-ready / invoicing probe (opened 2026-08-15)
+## P20 — app-ready (opened 2026-08-15)
 
 - **U1 — (FIXED P20-1) UNIQUE indexes.** `CREATE UNIQUE INDEX`; `23505`
   on INSERT / UPDATE / ON CONFLICT DO UPDATE; NULLs distinct (PG);
@@ -54,7 +54,6 @@ T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
   8/8 (incl. leap day 29/02/1972, pre-1970-safe). Residual: no
   month/day names, no AM/PM, no TZ fields; timestamptz only (no numeric
   to_char).
-- **U6 — apps/invoices gate (P20-6, pending).**
 
 ## P12–P19 (в плана, 2026-08-15)
 

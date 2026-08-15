@@ -308,7 +308,8 @@ cell2 пакети (доказаният модел на rocksbaga MT и queueba
 - SQL: `NUMERIC` P12; window P13; `COPY` P14 (STDIN/STDOUT text|csv);
   подзаявки — не.
 - Multi-shard транзакции: snapshot; `SERIALIZABLE` — P17 (не 2PC).
-- Auth: ACL + token/trust сега; SCRAM-SHA-256 — P15. TLS — не.
+- Auth: ACL + token/trust; SCRAM-SHA-256 (P15, auto ако user е s1).
+  TLS — не.
 - PG wire v3: COPY IN/OUT (P14, ST). Няма logical replication / LISTEN/NOTIFY.
 - Encoding: **само UTF-8**; без `client_encoding` смяна, без ICU collation.
 

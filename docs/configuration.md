@@ -79,7 +79,9 @@ client:
 | `BOILA_PGUSER` | `boila` | Never inherits `PGUSER` |
 | `BOILA_PGPASSWORD` | `""` | Trust when empty; never inherits `PGPASSWORD` |
 | `BOILA_PGDATABASE` | `boila` | Never inherits `PGDATABASE` |
-| `BOILA_TOKEN` | — | If set, sent as the cleartext password |
+| `BOILA_TOKEN` | — | Shared secret; cleartext password or ephemeral SCRAM |
+| `BOILA_AUTH` | `auto` | `scram` / `cleartext` / `trust` / `auto` (SASL if user is `s1:`) |
+| `BOILA_SCRAM_ITER` | `4096` | PBKDF2 rounds for new `s1:` verifiers |
 
 ## On-disk layout
 

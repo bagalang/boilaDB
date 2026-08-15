@@ -19,7 +19,9 @@ T = транзакции, W = wire protocol, F = FTS.
   няма frame clause; няма window+GROUP BY.
 - **N3 — (FIXED P14) COPY.** STDIN/STDOUT text+csv; wire CopyIn/Out.
   Residual: no binary/file/HEADER; COPY FROM MT pool → 0A000.
-- **N4 — SCRAM / filter-GC / SSI / FDW / raft.** PLAN P15–P19.
+- **N4 — (FIXED P15) SCRAM-SHA-256.** s1 verifier; auto SASL; live
+  pgbaga. Residual: no PLUS/TLS/MD5.
+- **N5 — filter-GC / SSI / FDW / raft.** PLAN P16–P19.
 
 ## Открити 2026-08-13 (ormbaga live + `--rc` serve_pg)
 
@@ -386,7 +388,8 @@ T = транзакции, W = wire protocol, F = FTS.
   SELECT/INSERT/UPDATE/DELETE/CREATE/DROP/ALTER/CONNECT/ALL on TABLE/`*`/
   DATABASE. Meta `u|`/`a|`. Empty catalog = open. PG: user+pw or token.
   HTTP: Basic user:pass + Bearer/X-Boila-Token. FNS_MAX raised 1024→2048.
-  Residual: no SCRAM/TLS (SCRAM = P15); SET ROLE without pw only for superuser.
+  Residual: TLS still no; SET ROLE without pw only for superuser.
+  SCRAM-SHA-256 = P15 (s1 verifier, auto SASL).
 - **W7 — (FIXED) SET/SHOW/RESET/DISCARD session GUC.** SET name {TO|=}
   value → store in `srv.guc` (ST) / `BoilaPgSess.guc` (PG) /
   HTTP-MT `sess_guc` (`http_guc.baga` + keepalive). SHOW reads map then

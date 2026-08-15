@@ -122,7 +122,7 @@ No upward imports. Prefixes (`boila_*`, `sql_*`, `vec_*`, `fts_*`,
 - One node. Shards are in-process, not networked. No raft / replica.
 - No cross-database queries or transactions.
 - No Geo/GPS — not on the roadmap.
-- P12 `NUMERIC`, P13 window, P14 `COPY`. Still no SCRAM (P15),
+- P12 `NUMERIC`, P13 window, P14 `COPY`, P15 SCRAM. Still no
   TLS, subqueries.
 - Transactions are a session buffer, not multi-version keys.
 - UTF-8 only; no ICU collation.

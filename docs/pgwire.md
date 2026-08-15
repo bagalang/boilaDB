@@ -33,7 +33,8 @@ See [security.md](security.md). Summary:
 - Otherwise AuthenticationCleartextPassword (`R` + 3). Password is
   either a catalog user’s password or the shared `BOILA_TOKEN`
   (token → superuser).
-- Failure → `28P01`. No SCRAM, no MD5, no TLS.
+- Failure → `28P01`. SCRAM-SHA-256 when the user is `s1:` or
+  `BOILA_AUTH=scram`. Cleartext `p` then → `28000`. No MD5, no TLS.
 
 ## What the server implements
 
@@ -125,7 +126,7 @@ SQLSTATE, rollback).
 
 Honest list so drivers do not guess:
 
-- No TLS, no SCRAM.
+- No TLS. SCRAM-SHA-256 is P15.
 - COPY IN/OUT (P14). No `LISTEN`/`NOTIFY`, no replication.
 - Window functions: P13 (`ROW_NUMBER`/`RANK`/`SUM` `OVER …`).
 - No `"Quoted"` identifiers — bare names only.

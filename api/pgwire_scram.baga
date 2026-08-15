@@ -1,0 +1,76 @@
+// pgwire_scram.baga — P15 AuthenticationSASL SCRAM-SHA-256 (RFC 5802/7677).
+import "pgwire_msg.baga"
+import "../catalog/acl.baga"
+import "../catalog/acl_scram.baga"
+import "pgbaga/auth/scram.baga"
+import "std/bytes/bytes.baga"
+import "std/str/str.baga"
+import "std/crypto/hmac.baga"
+import "std/time/time.baga"
+
+fn pgw_auth_sasl() -> bytes {
+    let mut body = pgw_be32(10)
+    body = bytes_concat(body, pgw_cstr("SCRAM-SHA-256"))
+    body = bytes_concat(body, pgw_one(0))
+    return pgw_msg(82, body)
+}
+
+fn pgw_auth_sasl_cont(payload: str) -> bytes {
+    let mut body = pgw_be32(11)
+    body = bytes_concat(body, bytes_of_str(payload))
+    return pgw_msg(82, body)
+}
+
+fn pgw_auth_sasl_final(payload: str) -> bytes {
+    let mut body = pgw_be32(12)
+    body = bytes_concat(body, bytes_of_str(payload))
+    return pgw_msg(82, body)
+}
+
+fn pgw_p_is_sasl(body: bytes) -> i64 {
+    let mech = pgw_cstr_read(body, 0)
+    if mech.s == "SCRAM-SHA-256" { return 1 }
+    return 0
+}
+
+fn pgw_sasl_client_first(body: bytes) -> str {
+    let mech = pgw_cstr_read(body, 0)
+    if bytes_len(body) < mech.pos + 4 { return "" }
+    let ln = pgw_be_read(body, mech.pos, 4)
+    if ln < 0 || mech.pos + 4 + ln > bytes_len(body) { return "" }
+    return str_of_bytes(bytes_slice(body, mech.pos + 4, mech.pos + 4 + ln))
+}
+
+// client-first-bare is after gs2 header "n,," or "y,," / "p=...,,"
+fn pgw_scram_cfirst_bare(cfirst: str) -> str {
+    let n = len(cfirst)
+    let mut i: i64 = 0
+    let mut commas: i64 = 0
+    while i < n {
+        if char_at(cfirst, i) == 44 {
+            commas = commas + 1
+            if commas == 2 {
+                return substr(cfirst, i + 1, n)
+            }
+        }
+        i = i + 1
+    }
+    return cfirst
+}
+
+fn pgw_scram_cnonce(bare: str) -> str {
+    return scram_attr(bare, "r")
+}
+
+fn pgw_scram_snonce(cnonce: str) -> str !Time {
+    let raw = hmac_sha256("boila$scram$nonce$v1", concat(cnonce, concat("|", int_to_str(time_now_ms()))))
+    return scram_nonce_from_bytes(raw)
+}
+
+fn boila_auth_mode() -> str !IO {
+    let e = env("BOILA_AUTH")
+    if e == "scram" || e == "cleartext" || e == "trust" {
+        return e
+    }
+    return "auto"
+}

@@ -1,0 +1,128 @@
+// acl_scram.baga — P15 SCRAM-SHA-256 verifier (s1:) on ACL hash field.
+// Format: s1:<iter>$<salt_b64>$<stored_key_b64>$<server_key_b64>
+import "pgbaga/auth/scram.baga"
+import "std/crypto/hmac.baga"
+import "std/crypto/ct.baga"
+import "std/bytes/bytes.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+import "std/time/time.baga"
+
+fn boila_scram_iter_default() -> i64 { return 4096 }
+
+fn boila_scram_iter() -> i64 !IO {
+    let e = env("BOILA_SCRAM_ITER")
+    if e == "" { return boila_scram_iter_default() }
+    let n = parse_int(e)
+    if n < 256 { return 256 }
+    if n > 100000 { return 100000 }
+    return n
+}
+
+fn boila_scram_is(stored: str) -> i64 {
+    if str_starts_with(stored, "s1:") { return 1 }
+    return 0
+}
+
+struct BoilaScramVer {
+    ok: i64,
+    iter: i64,
+    salt: Vec<i64>,
+    stored: Vec<i64>,
+    server: Vec<i64>,
+    salt_b64: str
+}
+
+fn boila_scram_ver_bad() -> BoilaScramVer {
+    let z: Vec<i64> = vec_new()
+    return BoilaScramVer { ok: 0, iter: 0, salt: z, stored: z, server: z, salt_b64: "" }
+}
+
+fn boila_scram_parse(stored: str) -> BoilaScramVer {
+    if boila_scram_is(stored) == 0 { return boila_scram_ver_bad() }
+    let rest = substr(stored, 3, len(stored))
+    let parts = str_split(rest, "$")
+    if vec_len(parts) != 4 { return boila_scram_ver_bad() }
+    let iter = parse_int(vec_get(parts, 0))
+    if iter < 1 { return boila_scram_ver_bad() }
+    let salt_b64 = vec_get(parts, 1)
+    let salt = base64_decode(salt_b64)
+    let stored_k = base64_decode(vec_get(parts, 2))
+    let server_k = base64_decode(vec_get(parts, 3))
+    if vec_len(salt) < 8 || vec_len(stored_k) != 32 || vec_len(server_k) != 32 {
+        return boila_scram_ver_bad()
+    }
+    return BoilaScramVer { ok: 1, iter: iter, salt: salt, stored: stored_k, server: server_k, salt_b64: salt_b64 }
+}
+
+fn boila_scram_keys(pw: str, salt: Vec<i64>, iter: i64) -> BoilaScramVer {
+    let salted = pbkdf2_hmac_sha256(bytes_from_str(pw), salt, iter)
+    let client_key = scram_hmac_str(salted, "Client Key")
+    let stored_k = scram_h(client_key)
+    let server_k = scram_hmac_str(salted, "Server Key")
+    return BoilaScramVer { ok: 1, iter: iter, salt: salt, stored: stored_k, server: server_k, salt_b64: base64_encode(salt) }
+}
+
+fn boila_scram_encode(v: BoilaScramVer) -> str {
+    return concat("s1:", concat(int_to_str(v.iter), concat("$", concat(v.salt_b64, concat("$", concat(base64_encode(v.stored), concat("$", base64_encode(v.server))))))))
+}
+
+fn boila_scram_salt_for(name: str, pw: str) -> Vec<i64> !Time {
+    let raw = hmac_sha256("boila$scram$salt$v1", concat(concat(name, "|"), concat(pw, concat("|", int_to_str(time_now_ms())))))
+    let out: Vec<i64> = vec_new()
+    let mut i: i64 = 0
+    while i < 16 && i < vec_len(raw) {
+        vec_push(out, vec_get(raw, i) & 255)
+        i = i + 1
+    }
+    return out
+}
+
+fn boila_scram_hash_pw(name: str, pw: str) -> str !IO !Time {
+    let iter = boila_scram_iter()?
+    let salt = boila_scram_salt_for(name, pw)?
+    return boila_scram_encode(boila_scram_keys(pw, salt, iter))
+}
+
+fn boila_scram_pw_ok(stored: str, pw: str) -> i64 {
+    let v = boila_scram_parse(stored)
+    if v.ok == 0 { return 0 }
+    let got = boila_scram_keys(pw, v.salt, v.iter)
+    if ct_eq(base64_encode(got.stored), base64_encode(v.stored)) { return 1 }
+    return 0
+}
+
+fn boila_scram_server_first(stored: str, client_nonce: str, server_nonce: str) -> str {
+    let v = boila_scram_parse(stored)
+    if v.ok == 0 { return "" }
+    let r = concat(client_nonce, server_nonce)
+    return concat(concat("r=", r), concat(concat(",s=", v.salt_b64), concat(",i=", int_to_str(v.iter))))
+}
+
+struct BoilaScramChk {
+    ok: i64,
+    sig: str
+}
+
+fn boila_scram_verify(stored: str, cfirst_bare: str, server_first: str, client_final: str) -> BoilaScramChk {
+    let v = boila_scram_parse(stored)
+    if v.ok == 0 { return BoilaScramChk { ok: 0, sig: "" } }
+    let proof_b64 = scram_attr(client_final, "p")
+    let r = scram_attr(client_final, "r")
+    let c = scram_attr(client_final, "c")
+    if proof_b64 == "" || r == "" { return BoilaScramChk { ok: 0, sig: "" } }
+    if c != "biws" { return BoilaScramChk { ok: 0, sig: "" } }
+    if r != scram_attr(server_first, "r") { return BoilaScramChk { ok: 0, sig: "" } }
+    let proof = base64_decode(proof_b64)
+    if vec_len(proof) != 32 { return BoilaScramChk { ok: 0, sig: "" } }
+    let cfwp = scram_client_final_without_proof(r)
+    let auth = concat(concat(concat(concat(cfirst_bare, ","), server_first), ","), cfwp)
+    let csig = scram_hmac_str(v.stored, auth)
+    let ckey = scram_vec_xor(proof, csig)
+    let got = scram_h(ckey)
+    if ct_eq(base64_encode(got), base64_encode(v.stored)) == false {
+        return BoilaScramChk { ok: 0, sig: "" }
+    }
+    let ssig = base64_encode(scram_hmac_str(v.server, auth))
+    return BoilaScramChk { ok: 1, sig: ssig }
+}

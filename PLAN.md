@@ -284,14 +284,19 @@
 
 ## P15 — SCRAM-SHA-256
 
-- PG startup: AuthenticationSASL (10) `SCRAM-SHA-256`; verifier в
-  ACL user row (salt + iter + StoredKey + ServerKey), не cleartext.
-- `std/crypto` SHA-256/HMAC + `ct_eq`. Клиентският път в pgbaga вече
-  говори SCRAM — сървърният кодек се пише в `api/pgwire_scram.baga`.
-- Empty catalog + empty token остава trust. `BOILA_AUTH=scram|cleartext|trust`.
-- **Гейт:** pgbaga connect със SCRAM user; грешна парола → `28P01`;
-  стар cleartext клиент при `BOILA_AUTH=scram` → `28000`.
-- Residual: няма channel binding (`-PLUS`), няма TLS, няма MD5.
+- Реализирано: CREATE/ALTER USER пише verifier `s1:<iter>$salt$StoredKey$ServerKey`
+  (PBKDF2-HMAC-SHA256, default 4096, `BOILA_SCRAM_ITER`).
+  `boila_acl_auth` / HTTP Basic / SET ROLE проверяват през същия verifier.
+  PG: `BOILA_AUTH=scram|cleartext|trust` (default **auto** — SASL ако
+  потребителят има s1, иначе cleartext). Empty catalog + no token = trust.
+  SASL: R10 / client-first / R11 / client-final / R12 `v=`.
+  Cleartext `p` при изискан SCRAM → `28000`.
+  Файлове: `catalog/acl_scram.baga`, `api/pgwire_scram.baga`.
+- **Гейт (минат):** `tests/boila_scram_test` — verifier + handshake
+  срещу pgbaga `scram_build_final`; live `pg_connect` SELECT 1;
+  грешна парола `ok=0`. `boila_acl_test` зелен (s1 + SET ROLE).
+- Residual: няма channel binding (`-PLUS`); няма TLS; няма MD5;
+  token-only SCRAM прави ephemeral verifier.
 
 ## P16 — Compaction filter за MVCC GC
 

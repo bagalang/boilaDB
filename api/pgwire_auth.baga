@@ -1,8 +1,10 @@
-// pgwire_auth.baga — cleartext auth: users ACL or BOILA_TOKEN.
+// pgwire_auth.baga — trust / cleartext / SCRAM-SHA-256 (P15).
 import "pgwire_msg.baga"
 import "pgwire_enc.baga"
+import "pgwire_scram.baga"
 import "../server/databases.baga"
 import "../catalog/acl.baga"
+import "../catalog/acl_scram.baga"
 import "../sql/exec_acl.baga"
 import "std/net/tcp.baga"
 import "std/os/os.baga"
@@ -20,44 +22,132 @@ struct BoilaPgAuth {
 
 fn pgw_write_a(fd: i64, b: bytes) -> i64 !Net !IO !Par { return tcp_write_bytes(fd, b)? }
 
+fn pgw_auth_fail(fd: i64, srv: BoilaServer, sess: BoilaPgSess, rr: PgWReader, state: str, msg: str, err: str) -> BoilaPgAuth !Net !IO !Par {
+    let w = pgw_write_a(fd, pgw_error(state, msg))?
+    return BoilaPgAuth { srv: srv, sess: sess, r: rr, ok: 0, err: err }
+}
+
+fn pgw_auth_cleartext(fd: i64, rr: PgWReader, srv: BoilaServer, sess: BoilaPgSess, login_user: str, token: str, has_users: i64) -> BoilaPgAuth !IO !Net !Time !Par {
+    let w0 = pgw_write_a(fd, pgw_msg(82, pgw_be32(3)))?
+    if w0 != 0 {
+        return BoilaPgAuth { srv: srv, sess: sess, r: rr, ok: 0, err: "auth write" }
+    }
+    let pm = pgw_read_msg(rr)?
+    rr = pm.r
+    if pm.ok == 0 || pm.typ != 112 {
+        return BoilaPgAuth { srv: srv, sess: sess, r: rr, ok: 0, err: "no password" }
+    }
+    let pw = pgw_cstr_read(pm.body, 0)
+    let mut auth_ok = 0
+    if has_users == 1 && login_user != "" {
+        let ar = boila_acl_auth(srv.meta, login_user, pw.s)?
+        srv.meta = ar.s
+        if ar.ok == 1 {
+            auth_ok = 1
+            sess.guc = boila_sess_set_user(sess.guc, login_user, ar.super)
+        }
+    }
+    if auth_ok == 0 && token != "" && ct_eq(pw.s, token) {
+        auth_ok = 1
+        let mut un = login_user
+        if un == "" { un = "boila" }
+        sess.guc = boila_sess_set_user(sess.guc, un, 1)
+    }
+    if auth_ok == 0 {
+        return pgw_auth_fail(fd, srv, sess, rr, "28P01", "password authentication failed", "bad auth")?
+    }
+    return BoilaPgAuth { srv: srv, sess: sess, r: rr, ok: 1, err: "" }
+}
+
+fn pgw_auth_scram(fd: i64, rr: PgWReader, srv: BoilaServer, sess: BoilaPgSess, login_user: str, token: str) -> BoilaPgAuth !IO !Net !Time !Par {
+    let w0 = pgw_write_a(fd, pgw_auth_sasl())?
+    if w0 != 0 {
+        return BoilaPgAuth { srv: srv, sess: sess, r: rr, ok: 0, err: "sasl write" }
+    }
+    let pm = pgw_read_msg(rr)?
+    rr = pm.r
+    if pm.ok == 0 || pm.typ != 112 {
+        return BoilaPgAuth { srv: srv, sess: sess, r: rr, ok: 0, err: "no sasl" }
+    }
+    if pgw_p_is_sasl(pm.body) == 0 {
+        return pgw_auth_fail(fd, srv, sess, rr, "28000", "SCRAM-SHA-256 required", "need scram")?
+    }
+    let cfirst = pgw_sasl_client_first(pm.body)
+    let bare = pgw_scram_cfirst_bare(cfirst)
+    let cnonce = pgw_scram_cnonce(bare)
+    if cnonce == "" {
+        return pgw_auth_fail(fd, srv, sess, rr, "28000", "invalid SCRAM client-first", "bad cfirst")?
+    }
+    let mut ver = ""
+    let mut is_super: i64 = 0
+    if login_user != "" {
+        let ug = boila_acl_user_get(srv.meta, login_user)?
+        srv.meta = ug.s
+        if ug.ok == 1 && boila_scram_is(ug.hash) == 1 {
+            ver = ug.hash
+            is_super = ug.super
+        }
+    }
+    if ver == "" && token != "" {
+        ver = boila_scram_hash_pw(login_user, token)?
+        is_super = 1
+    }
+    if ver == "" {
+        ver = boila_scram_hash_pw("!", "!")?
+    }
+    let snonce = pgw_scram_snonce(cnonce)?
+    let sfirst = boila_scram_server_first(ver, cnonce, snonce)
+    if sfirst == "" {
+        return pgw_auth_fail(fd, srv, sess, rr, "28000", "SCRAM setup failed", "no sfirst")?
+    }
+    let w1 = pgw_write_a(fd, pgw_auth_sasl_cont(sfirst))?
+    if w1 != 0 {
+        return BoilaPgAuth { srv: srv, sess: sess, r: rr, ok: 0, err: "cont write" }
+    }
+    let pm2 = pgw_read_msg(rr)?
+    rr = pm2.r
+    if pm2.ok == 0 || pm2.typ != 112 {
+        return BoilaPgAuth { srv: srv, sess: sess, r: rr, ok: 0, err: "no final" }
+    }
+    let cfinal = str_of_bytes(pm2.body)
+    let chk = boila_scram_verify(ver, bare, sfirst, cfinal)
+    if chk.ok == 0 {
+        return pgw_auth_fail(fd, srv, sess, rr, "28P01", "password authentication failed", "bad proof")?
+    }
+    let w2 = pgw_write_a(fd, pgw_auth_sasl_final(concat("v=", chk.sig)))?
+    if w2 != 0 {
+        return BoilaPgAuth { srv: srv, sess: sess, r: rr, ok: 0, err: "final write" }
+    }
+    let mut un = login_user
+    if un == "" { un = "boila" }
+    sess.guc = boila_sess_set_user(sess.guc, un, is_super)
+    return BoilaPgAuth { srv: srv, sess: sess, r: rr, ok: 1, err: "" }
+}
+
 // After startup: authenticate and set sess.guc user. ok=0 → caller closes.
 fn pgw_authenticate(fd: i64, rr: PgWReader, srv: BoilaServer, sess: BoilaPgSess, login_user: str) -> BoilaPgAuth !IO !Net !Time !Par {
+    let mode = boila_auth_mode()?
+    if mode == "trust" {
+        return BoilaPgAuth { srv: srv, sess: sess, r: rr, ok: 1, err: "" }
+    }
     let token = env("BOILA_TOKEN")
     let uc = boila_acl_user_count(srv.meta)?
     srv.meta = uc.s
     let mut need_pw = 0
     if uc.super > 0 { need_pw = 1 }
     if token != "" { need_pw = 1 }
-    if need_pw == 1 {
-        let w0 = pgw_write_a(fd, pgw_msg(82, pgw_be32(3)))?
-        if w0 != 0 {
-            return BoilaPgAuth { srv: srv, sess: sess, r: rr, ok: 0, err: "auth write" }
-        }
-        let pm = pgw_read_msg(rr)?
-        rr = pm.r
-        if pm.ok == 0 || pm.typ != 112 {
-            return BoilaPgAuth { srv: srv, sess: sess, r: rr, ok: 0, err: "no password" }
-        }
-        let pw = pgw_cstr_read(pm.body, 0)
-        let mut auth_ok = 0
-        if uc.super > 0 && login_user != "" {
-            let ar = boila_acl_auth(srv.meta, login_user, pw.s)?
-            srv.meta = ar.s
-            if ar.ok == 1 {
-                auth_ok = 1
-                sess.guc = boila_sess_set_user(sess.guc, login_user, ar.super)
-            }
-        }
-        if auth_ok == 0 && token != "" && ct_eq(pw.s, token) {
-            auth_ok = 1
-            let mut un = login_user
-            if un == "" { un = "boila" }
-            sess.guc = boila_sess_set_user(sess.guc, un, 1)
-        }
-        if auth_ok == 0 {
-            let w1 = pgw_write_a(fd, pgw_error("28P01", "password authentication failed"))?
-            return BoilaPgAuth { srv: srv, sess: sess, r: rr, ok: 0, err: "bad auth" }
-        }
+    if need_pw == 0 {
+        return BoilaPgAuth { srv: srv, sess: sess, r: rr, ok: 1, err: "" }
     }
-    return BoilaPgAuth { srv: srv, sess: sess, r: rr, ok: 1, err: "" }
+    let mut use_scram = 0
+    if mode == "scram" { use_scram = 1 }
+    if mode == "auto" && login_user != "" {
+        let ug = boila_acl_user_get(srv.meta, login_user)?
+        srv.meta = ug.s
+        if ug.ok == 1 && boila_scram_is(ug.hash) == 1 { use_scram = 1 }
+    }
+    if use_scram == 1 {
+        return pgw_auth_scram(fd, rr, srv, sess, login_user, token)?
+    }
+    return pgw_auth_cleartext(fd, rr, srv, sess, login_user, token, uc.super)?
 }

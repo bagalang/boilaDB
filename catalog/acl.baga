@@ -16,6 +16,7 @@ import "std/str/str.baga"
 import "std/bytes/bytes.baga"
 import "std/crypto/ct.baga"
 import "std/crypto/hmac.baga"
+import "acl_scram.baga"
 
 fn boila_priv_connect() -> i64 { return 1 }
 fn boila_priv_select() -> i64 { return 2 }
@@ -67,6 +68,9 @@ fn boila_acl_hash_pw_h1(pw: str) -> str {
 }
 
 fn boila_acl_pw_ok(stored: str, pw: str) -> i64 {
+    if boila_scram_is(stored) == 1 {
+        return boila_scram_pw_ok(stored, pw)
+    }
     if str_starts_with(stored, "h2:") {
         if ct_eq(stored, boila_acl_hash_pw(pw)) { return 1 }
         return 0
@@ -134,7 +138,7 @@ fn boila_acl_user_create(s: BoilaStore, name: str, pw: str, super: i64) -> Boila
     if g.ok == 1 {
         return BoilaAclRes { s: s, ok: 0, err: concat("роля \"", concat(name, "\" вече съществува")), state: "42710", super: 0, hash: "" }
     }
-    s = boila_acl_user_put(s, name, super, boila_acl_hash_pw(pw))?
+    s = boila_acl_user_put(s, name, super, boila_scram_hash_pw(name, pw)?)?
     return BoilaAclRes { s: s, ok: 1, err: "", state: "", super: super, hash: "" }
 }
 
@@ -162,7 +166,7 @@ fn boila_acl_set_pw(s: BoilaStore, name: str, pw: str) -> BoilaAclRes !IO !Time 
     let g = boila_acl_user_get(s, name)?
     s = g.s
     if g.ok == 0 { return g }
-    s = boila_acl_user_put(s, name, g.super, boila_acl_hash_pw(pw))?
+    s = boila_acl_user_put(s, name, g.super, boila_scram_hash_pw(name, pw)?)?
     return BoilaAclRes { s: s, ok: 1, err: "", state: "", super: g.super, hash: "" }
 }
 
@@ -175,9 +179,9 @@ fn boila_acl_auth(s: BoilaStore, name: str, pw: str) -> BoilaAclRes !IO !Time !P
     if boila_acl_pw_ok(g.hash, pw) == 0 {
         return BoilaAclRes { s: s, ok: 0, err: "password authentication failed", state: "28P01", super: 0, hash: "" }
     }
-    // upgrade h1 → h2 on successful login
-    if str_starts_with(g.hash, "h2:") == false {
-        s = boila_acl_user_put(s, name, g.super, boila_acl_hash_pw(pw))?
+    // upgrade h1/h2 → s1 on successful login
+    if boila_scram_is(g.hash) == 0 {
+        s = boila_acl_user_put(s, name, g.super, boila_scram_hash_pw(name, pw)?)?
     }
     return BoilaAclRes { s: s, ok: 1, err: "", state: "", super: g.super, hash: "" }
 }

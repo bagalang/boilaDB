@@ -1,8 +1,9 @@
 # Security
 
-v1 auth is **cleartext password or a shared token**. There is no
-SCRAM and no TLS (gaps W6). Put boilaDB behind a trusted network or
-a TLS terminator if it leaves localhost.
+Auth is **SCRAM-SHA-256 (P15)** when the user has an `s1:` verifier
+(CREATE/ALTER USER writes that), **cleartext** for leftover `h2:`
+rows, or a **shared token**. There is no TLS (gaps W6). Put boilaDB
+behind a trusted network or a TLS terminator if it leaves localhost.
 
 ## Modes
 
@@ -10,7 +11,8 @@ a TLS terminator if it leaves localhost.
 |---------------|---------------|-----------|
 | none | unset | **Trust** — no password, no HTTP header |
 | none | set | Token is the password / Bearer / `X-Boila-Token` → superuser |
-| some | unset | User + password (PG cleartext, HTTP Basic) |
+| some (`s1:`) | unset | PG SASL SCRAM-SHA-256; HTTP Basic still sends the password |
+| some (`h2:`) | unset | PG cleartext; HTTP Basic |
 | some | set | User+password **or** token (token → superuser) |
 
 An empty catalog is “open”. The first `CREATE USER` turns the server
@@ -83,14 +85,17 @@ cookie and header to match. Details: [http.md](http.md).
 
 ## PostgreSQL wire
 
-AuthenticationCleartextPassword only. The password field is the user
-password **or** `BOILA_TOKEN`. Failure: `28P01`.
+`BOILA_AUTH=scram|cleartext|trust` (default **auto**: SASL if the
+user’s hash is `s1:`, else cleartext). SCRAM is AuthenticationSASL
+`SCRAM-SHA-256`. A cleartext `p` when SASL is required → `28000`.
+Failure: `28P01`. `BOILA_TOKEN` still works as cleartext or as an
+ephemeral SCRAM password when no matching user exists.
 
 `sslmode=disable`. An SSLRequest is answered `'N'`.
 
 ## What this is not
 
-- No TLS, no SCRAM-SHA-256, no cert auth.
+- No TLS, no cert auth, no SCRAM channel binding (`-PLUS`).
 - No row-level security, no column grants.
 - No audit log.
 - No WebSocket (removed from the surface on purpose).

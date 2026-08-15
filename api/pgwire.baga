@@ -94,6 +94,25 @@ fn pgw_write_out(fd: i64, srv: BoilaServer, sess: BoilaPgSess, out: BoilaSrvOut,
         return BoilaPgOut { srv: srv2, sess: sess2, ok: 1, sql_err: 1, err: "" }
     }
     let mut buf = bytes_new(0)
+    if out.kind == 31 {
+        buf = bytes_concat(buf, pgw_copy_resp(72, 1))
+        let mut i: i64 = 0
+        while i < vec_len(out.res.rows) {
+            let row = vec_get(out.res.rows, i)
+            let mut line = ""
+            if vec_len(row) > 0 && vec_get(row, 0).tag == boila_v_str() {
+                line = str_of_bytes(vec_get(row, 0).b)
+            }
+            buf = bytes_concat(buf, pgw_copy_data_line(line))
+            i = i + 1
+        }
+        buf = bytes_concat(buf, pgw_copy_done_msg())
+        buf = bytes_concat(buf, pgw_command_complete(pgw_tag(out.kind, out.id, vec_len(out.res.rows))))
+        if send_ready == 1 { buf = bytes_concat(buf, pgw_ready(pgw_tx_status(sess2))) }
+        let w = pgw_write(fd, buf)?
+        if w != 0 { return BoilaPgOut { srv: srv2, sess: sess2, ok: 0, sql_err: 0, err: "write error" } }
+        return BoilaPgOut { srv: srv2, sess: sess2, ok: 1, sql_err: 0, err: "" }
+    }
     if out.kind == 1 || vec_len(out.res.rows) > 0 {
         buf = bytes_concat(buf, pgw_row_desc_typed(out.res.cols, out.res.tags))
         let mut i: i64 = 0

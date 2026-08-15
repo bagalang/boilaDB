@@ -1,0 +1,114 @@
+// parse_copy.baga — P14 COPY t [(cols)] FROM STDIN | TO STDOUT
+// [WITH (FORMAT text|csv)]. BINARY / file / PROGRAM → 0A000.
+import "token.baga"
+import "lexer.baga"
+import "parse_common.baga"
+import "std/str/str.baga"
+
+struct BoilaCopy {
+    table: str,
+    cols: Vec<str>,
+    dir: i64,    // 1 FROM, 2 TO
+    fmt: i64     // 0 text, 1 csv
+}
+
+struct BoilaParseCopy {
+    ok: i64,
+    cp: BoilaCopy,
+    err: str,
+    state: str
+}
+
+fn boila_copy_empty() -> BoilaCopy {
+    let c: Vec<str> = vec_new()
+    return BoilaCopy { table: "", cols: c, dir: 0, fmt: 0 }
+}
+
+fn boila_pcp_fail(msg: str, state: str) -> BoilaParseCopy {
+    return BoilaParseCopy { ok: 0, cp: boila_copy_empty(), err: msg, state: state }
+}
+
+fn boila_parse_copy(l: BoilaLex) -> BoilaParseCopy {
+    if tok_kw(boila_ps_tok(l, 0), "copy") != 1 {
+        return boila_pcp_fail("очаквах COPY", "42601")
+    }
+    let tn = boila_ps_tok(l, 1)
+    if tn.kind != tok_ident() {
+        return boila_pcp_fail("очаквах име на таблица след COPY", "42601")
+    }
+    let mut cp = boila_copy_empty()
+    cp.table = tn.txt
+    let mut i: i64 = 2
+    if boila_ps_tok(l, i).kind == tok_lparen() {
+        i = i + 1
+        let mut more = true
+        while more {
+            let c = boila_ps_tok(l, i)
+            if c.kind != tok_ident() {
+                return boila_pcp_fail("очаквах колона в COPY (...)", "42601")
+            }
+            vec_push(cp.cols, c.txt)
+            i = i + 1
+            if boila_ps_tok(l, i).kind == tok_comma() {
+                i = i + 1
+            } else {
+                more = false
+            }
+        }
+        if boila_ps_tok(l, i).kind != tok_rparen() {
+            return boila_pcp_fail("очаквах ')' след колоните", "42601")
+        }
+        i = i + 1
+    }
+    if tok_kw(boila_ps_tok(l, i), "from") == 1 {
+        cp.dir = 1
+        i = i + 1
+    } else {
+        if tok_kw(boila_ps_tok(l, i), "to") == 1 {
+            cp.dir = 2
+            i = i + 1
+        } else {
+            return boila_pcp_fail("очаквах FROM или TO", "42601")
+        }
+    }
+    let src = boila_ps_tok(l, i)
+    if cp.dir == 1 {
+        if tok_kw(src, "stdin") != 1 {
+            return boila_pcp_fail("COPY FROM поддържа само STDIN (P14)", "0A000")
+        }
+    } else {
+        if tok_kw(src, "stdout") != 1 {
+            return boila_pcp_fail("COPY TO поддържа само STDOUT (P14)", "0A000")
+        }
+    }
+    i = i + 1
+    if tok_kw(boila_ps_tok(l, i), "with") == 1 {
+        i = i + 1
+        if boila_ps_tok(l, i).kind != tok_lparen() {
+            return boila_pcp_fail("очаквах '(' след WITH", "42601")
+        }
+        i = i + 1
+        if tok_kw(boila_ps_tok(l, i), "format") != 1 {
+            return boila_pcp_fail("WITH поддържа само FORMAT text|csv", "0A000")
+        }
+        i = i + 1
+        let fv = boila_ps_tok(l, i)
+        if tok_kw(fv, "csv") == 1 {
+            cp.fmt = 1
+        } else {
+            if tok_kw(fv, "text") != 1 {
+                return boila_pcp_fail("FORMAT е text или csv", "0A000")
+            }
+        }
+        i = i + 1
+        if boila_ps_tok(l, i).kind != tok_rparen() {
+            return boila_pcp_fail("очаквах ')' след FORMAT", "42601")
+        }
+        i = i + 1
+    }
+    if boila_ps_tok(l, i).kind == tok_semi() { i = i + 1 }
+    if boila_ps_tok(l, i).kind != tok_eof() {
+        return boila_pcp_fail(concat("неочакван токен '", concat(boila_ps_tok(l, i).txt, "' след COPY")), "42601")
+    }
+    return BoilaParseCopy { ok: 1, cp: cp, err: "", state: "" }
+}

@@ -305,10 +305,11 @@ cell2 пакети (доказаният модел на rocksbaga MT и queueba
   и локален FDW — P18. Cross-db транзакция/2PC — не.
 - **Geo/GPS: няма.** Без geometry типове, без пространствени индекси, без
   GPS/trajectory ingestion — и не са планирани.
-- SQL: `NUMERIC` P12; window P13; `COPY` P14; подзаявки — не.
+- SQL: `NUMERIC` P12; window P13; `COPY` P14 (STDIN/STDOUT text|csv);
+  подзаявки — не.
 - Multi-shard транзакции: snapshot; `SERIALIZABLE` — P17 (не 2PC).
 - Auth: ACL + token/trust сега; SCRAM-SHA-256 — P15. TLS — не.
-- PG wire v3: COPY — P14; няма logical replication / LISTEN/NOTIFY.
+- PG wire v3: COPY IN/OUT (P14, ST). Няма logical replication / LISTEN/NOTIFY.
 - Encoding: **само UTF-8**; без `client_encoding` смяна, без ICU collation.
 
 ## 9. Правила за размер на файловете (урокът от barabadb)

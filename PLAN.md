@@ -270,12 +270,17 @@
 
 ## P14 — COPY
 
-- SQL: `COPY t (cols) FROM STDIN` / `TO STDOUT` `[WITH (FORMAT csv|text)]`.
-- PG wire: `CopyInResponse` / `CopyOutResponse` / `CopyData` /
-  `CopyDone` / `CopyFail`. Text + CSV (csvbaga).
-- **Гейт:** pgbaga или ръчен framer: 1k реда COPY IN → SELECT count;
-  COPY OUT съвпада; грешен ред → `22P04`/`22P05`, транзакцията rollback.
-- Residual: няма binary COPY, няма `FROM 'file'`, няма `FREEZE`.
+- Реализирано: `COPY t [(cols)] FROM STDIN | TO STDOUT`
+  `[WITH (FORMAT text|csv)]`. Text = tab + `\N` + `\.`; CSV през
+  csvbaga. FROM е implicit txn (грешка → rollback).
+  Файлове: `sql/parse_copy.baga`, `sql/exec_copy*.baga`,
+  `api/pgwire_copy.baga`. Wire: CopyIn (`G`/`d`/`c`/`f`) на ST;
+  CopyOut (`H`/`d`/`c`) за TO.
+- **Гейт (минат):** `tests/boila_copy_test` — text+csv IN/OUT;
+  1k IN → COUNT 1000 + OUT 1000; лош ред → `22P04` и COUNT непроменен;
+  `FROM 'file'` → `0A000`.
+- Residual: няма binary / `FROM 'file'` / `FREEZE` / HEADER /
+  DELIMITER; COPY FROM в MT pool (`BOILA_WORKERS>0`) → `0A000`.
 
 ## P15 — SCRAM-SHA-256
 

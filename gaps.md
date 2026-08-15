@@ -17,7 +17,9 @@ T = транзакции, W = wire protocol, F = FTS.
 - **N2 — (FIXED P13) Window functions.** `parse_window` + `exec_window`.
   Residual: един OVER spec; няма LAG/LEAD/NTILE/named WINDOW;
   няма frame clause; няма window+GROUP BY.
-- **N3 — COPY / SCRAM / filter-GC / SSI / FDW / raft.** PLAN P14–P19.
+- **N3 — (FIXED P14) COPY.** STDIN/STDOUT text+csv; wire CopyIn/Out.
+  Residual: no binary/file/HEADER; COPY FROM MT pool → 0A000.
+- **N4 — SCRAM / filter-GC / SSI / FDW / raft.** PLAN P15–P19.
 
 ## Открити 2026-08-13 (ormbaga live + `--rc` serve_pg)
 

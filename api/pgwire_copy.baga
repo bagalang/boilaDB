@@ -1,0 +1,88 @@
+// pgwire_copy.baga — P14 COPY FROM collect loop (CopyData until CopyDone).
+import "pgwire_msg.baga"
+import "pgwire.baga"
+import "../sql/lexer.baga"
+import "../sql/token.baga"
+import "../sql/parse_copy.baga"
+import "../server/databases.baga"
+import "../server/exec_server.baga"
+import "std/bytes/bytes.baga"
+import "std/str/str.baga"
+
+struct BoilaPgCopy {
+    hit: i64,
+    srv: BoilaServer,
+    sess: BoilaPgSess,
+    rr: PgWReader,
+    ok: i64
+}
+
+fn pgw_copy_in_run(fd: i64, pack: i64, srv: BoilaServer, sess: BoilaPgSess, sql: str, rr: PgWReader) -> BoilaPgCopy !IO !Net !Time !Par {
+    let lx = boila_lex(sql)
+    if lx.err != "" || tok_kw(vec_get(lx.toks, 0), "copy") != 1 {
+        return BoilaPgCopy { hit: 0, srv: srv, sess: sess, rr: rr, ok: 1 }
+    }
+    let p = boila_parse_copy(lx)
+    if p.ok == 0 || p.cp.dir != 1 {
+        return BoilaPgCopy { hit: 0, srv: srv, sess: sess, rr: rr, ok: 1 }
+    }
+    let natts = vec_len(p.cp.cols)
+    let w0 = pgw_write(fd, pgw_copy_resp(71, natts))?
+    if w0 != 0 {
+        return BoilaPgCopy { hit: 1, srv: srv, sess: sess, rr: rr, ok: 0 }
+    }
+    let mut data = ""
+    let mut done = 0
+    let mut r2 = rr
+    while done == 0 {
+        let m = pgw_read_msg(r2)?
+        r2 = m.r
+        if m.ok == 0 {
+            return BoilaPgCopy { hit: 1, srv: srv, sess: sess, rr: r2, ok: 0 }
+        }
+        if m.typ == 100 {
+            data = concat(data, str_of_bytes(m.body))
+        } else {
+            if m.typ == 99 {
+                done = 1
+            } else {
+                if m.typ == 102 {
+                    let msg = pgw_cstr_read(m.body, 0)
+                    let w = pgw_write(fd, bytes_concat(pgw_error("57014", msg.s), pgw_ready(pgw_tx_status(sess))))?
+                    if w != 0 {
+                        return BoilaPgCopy { hit: 1, srv: srv, sess: sess, rr: r2, ok: 0 }
+                    }
+                    return BoilaPgCopy { hit: 1, srv: srv, sess: sess, rr: r2, ok: 1 }
+                } else {
+                    let w = pgw_write(fd, bytes_concat(pgw_error("08P01", "очаквах CopyData/CopyDone"), pgw_ready(pgw_tx_status(sess))))?
+                    if w != 0 {
+                        return BoilaPgCopy { hit: 1, srv: srv, sess: sess, rr: r2, ok: 0 }
+                    }
+                    return BoilaPgCopy { hit: 1, srv: srv, sess: sess, rr: r2, ok: 1 }
+                }
+            }
+        }
+    }
+    if pack != 0 {
+        let w = pgw_write(fd, bytes_concat(pgw_error("0A000", "COPY FROM в MT pool — residual"), pgw_ready(pgw_tx_status(sess))))?
+        if w != 0 {
+            return BoilaPgCopy { hit: 1, srv: srv, sess: sess, rr: r2, ok: 0 }
+        }
+        return BoilaPgCopy { hit: 1, srv: srv, sess: sess, rr: r2, ok: 1 }
+    }
+    let out = boila_server_copy_from(srv, sess.db, sql, data)?
+    srv = out.srv
+    sess.txn = out.txn
+    let mut buf = bytes_new(0)
+    if out.ok == 0 {
+        buf = pgw_error(out.state, out.err)
+    } else {
+        buf = pgw_command_complete(concat("COPY ", int_to_str(out.id)))
+    }
+    buf = bytes_concat(buf, pgw_ready(pgw_tx_status(sess)))
+    let w = pgw_write(fd, buf)?
+    if w != 0 {
+        return BoilaPgCopy { hit: 1, srv: srv, sess: sess, rr: r2, ok: 0 }
+    }
+    return BoilaPgCopy { hit: 1, srv: srv, sess: sess, rr: r2, ok: 1 }
+}

@@ -9,3 +9,4 @@ rocksbaga = { path = "../rocksbaga" }
 httpdbaga = { path = "../httpdbaga" }
 metbaga = { path = "../metbaga" }
 bagadecimal = { path = "../bagadecimal" }
+csvbaga = { path = "../csvbaga" }

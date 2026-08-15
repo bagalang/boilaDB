@@ -44,7 +44,7 @@ See [security.md](security.md). Summary:
 | Close (`C`) | Yes |
 | Terminate (`X`) | Yes |
 | CancelRequest | Accepted (startup path); no mid-query cancel |
-| COPY | No (`0A000`) |
+| COPY | Yes — `FROM STDIN` / `TO STDOUT` (text/csv). `G`/`H`/`d`/`c`/`f` |
 | LISTEN / NOTIFY | No |
 | Logical replication | No |
 
@@ -126,7 +126,7 @@ SQLSTATE, rollback).
 Honest list so drivers do not guess:
 
 - No TLS, no SCRAM.
-- No `COPY`, no `LISTEN`/`NOTIFY`, no replication.
+- COPY IN/OUT (P14). No `LISTEN`/`NOTIFY`, no replication.
 - Window functions: P13 (`ROW_NUMBER`/`RANK`/`SUM` `OVER …`).
 - No `"Quoted"` identifiers — bare names only.
 - No `SERIAL`, `DEFAULT`, `NOT NULL`, `REFERENCES`, arrays.

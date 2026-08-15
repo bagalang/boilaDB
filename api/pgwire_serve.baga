@@ -4,6 +4,7 @@
 // pgwire.baga; Describe — в pgwire_desc.baga.
 
 import "pgwire.baga"
+import "pgwire_copy.baga"
 import "pgwire_msg.baga"
 import "pgwire_enc.baga"
 import "pgwire_auth.baga"
@@ -158,6 +159,13 @@ fn boila_pg_serve_p(fd: i64, pack: i64, srv: BoilaServer) -> BoilaPgOut !IO !Net
             } else {
             if m.typ == 81 {                                  // 'Q' simple
                 let sql = pgw_cstr_read(m.body, 0)
+                let cin = pgw_copy_in_run(fd, pack, srv2, sp, sql.s, rr)?
+                if cin.hit == 1 {
+                    rr = cin.rr
+                    if pack == 0 { srv2 = cin.srv }
+                    sp = cin.sess
+                    if cin.ok == 0 { running = false }
+                } else {
                 let ro = pgw_run_sql(fd, pack, srv2, sp, sql.s, 1)?
                 // pack!=0: ro.srv е throwaway seed (алокиран след mem_mark).
                 // srv2 е track-нат; assign release-ва стария след rewind →
@@ -168,6 +176,7 @@ fn boila_pg_serve_p(fd: i64, pack: i64, srv: BoilaServer) -> BoilaPgOut !IO !Net
                 sp = ro.sess
                 if ro.ok == 0 {
                     running = false
+                }
                 }
             } else {
                 if m.typ == 80 {                              // 'P' Parse

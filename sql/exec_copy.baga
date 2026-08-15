@@ -1,0 +1,204 @@
+// exec_copy.baga — P14 COPY FROM STDIN / TO STDOUT.
+import "../storage/shards.baga"
+import "../catalog/schema.baga"
+import "../txn/mvcc.baga"
+import "../core/value.baga"
+import "ast.baga"
+import "parse_copy.baga"
+import "parse_insert.baga"
+import "exec_copy_fmt.baga"
+import "exec_insert.baga"
+import "exec_scan.baga"
+import "exec_out.baga"
+import "plan_cache.baga"
+import "csvbaga/csv.baga"
+import "std/str/str.baga"
+
+fn boila_copy_kind() -> i64 { return 31 }
+
+fn boila_copy_lines(src: str) -> Vec<str> {
+    let raw = str_split(src, "\n")
+    let out: Vec<str> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(raw) {
+        let mut ln = vec_get(raw, i)
+        let n = len(ln)
+        if n > 0 && char_at(ln, n - 1) == 13 {
+            ln = substr(ln, 0, n - 1)
+        }
+        if ln == "\\." {
+            i = vec_len(raw)
+        } else {
+            if i < vec_len(raw) - 1 || ln != "" {
+                vec_push(out, ln)
+            }
+            i = i + 1
+        }
+    }
+    return out
+}
+
+fn boila_copy_resolve_cols(t: BoilaTable, names: Vec<str>) -> Vec<i64> {
+    let cix: Vec<i64> = vec_new()
+    if vec_len(names) == 0 {
+        let mut i: i64 = 0
+        while i < vec_len(t.cols) {
+            vec_push(cix, i)
+            i = i + 1
+        }
+        return cix
+    }
+    let mut i: i64 = 0
+    while i < vec_len(names) {
+        vec_push(cix, boila_col_idx(t, vec_get(names, i)))
+        i = i + 1
+    }
+    return cix
+}
+
+fn boila_copy_to(s: BoilaStore, txn: BoilaTxn, pc: BoilaPlanCache, t: BoilaTable, cp: BoilaCopy) -> BoilaSqlOut !IO !Time !Par {
+    let cix = boila_copy_resolve_cols(t, cp.cols)
+    let mut i: i64 = 0
+    while i < vec_len(cix) {
+        if vec_get(cix, i) < 0 {
+            return boila_sql_fail(s, txn, pc, concat("колона '", concat(vec_get(cp.cols, i), "' не съществува")), "42703")
+        }
+        i = i + 1
+    }
+    let mut sel = boila_sel_empty()
+    sel.table = t.name
+    sel.star = 1
+    let f = boila_fetch_rows(s, txn, t, sel)?
+    if f.ok == 0 {
+        return boila_sql_fail(f.s, f.txn, pc, f.err, f.state)
+    }
+    let mut res = boila_result_empty()
+    boila_result_add_col(res, "copy", boila_v_str())
+    i = 0
+    while i < vec_len(f.rows) {
+        let row = vec_get(f.rows, i)
+        let fields: Vec<str> = vec_new()
+        let mut c: i64 = 0
+        while c < vec_len(cix) {
+            let ix = vec_get(cix, c)
+            let mut v = boila_val_null()
+            if ix >= 0 && ix < vec_len(row) { v = vec_get(row, ix) }
+            if cp.fmt == 1 {
+                if v.tag == boila_v_null() { vec_push(fields, "\\N") }
+                else { vec_push(fields, boila_copy_unescape(boila_copy_val_text(v))) }
+            } else {
+                vec_push(fields, boila_copy_val_text(v))
+            }
+            c = c + 1
+        }
+        let mut line = ""
+        if cp.fmt == 1 { line = boila_copy_join_csv(fields) }
+        else { line = boila_copy_join_text(fields) }
+        let r: Vec<BoilaVal> = vec_new()
+        vec_push(r, boila_val_str(line))
+        vec_push(res.rows, r)
+        i = i + 1
+    }
+    return BoilaSqlOut { s: f.s, txn: f.txn, pc: pc, ok: 1, err: "", state: "", kind: boila_copy_kind(), res: res, id: vec_len(res.rows) }
+}
+
+fn boila_copy_from(s: BoilaStore, txn: BoilaTxn, pc: BoilaPlanCache, db: str, t: BoilaTable, cp: BoilaCopy, data: str) -> BoilaSqlOut !IO !Time !Par {
+    let cix = boila_copy_resolve_cols(t, cp.cols)
+    let mut colnames: Vec<str> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(cix) {
+        if vec_get(cix, i) < 0 {
+            return boila_sql_fail(s, txn, pc, concat("колона '", concat(vec_get(cp.cols, i), "' не съществува")), "42703")
+        }
+        vec_push(colnames, vec_get(t.cols, vec_get(cix, i)).name)
+        i = i + 1
+    }
+    let ncols = vec_len(cix)
+    let tuples: Vec<Vec<BoilaVal>> = vec_new()
+    if cp.fmt == 1 {
+        let tab = csv_parse(data)
+        if tab.ok == 0 {
+            return boila_sql_fail(s, txn, pc, tab.err, "22P04")
+        }
+        let nr = csv_nrows(tab)
+        i = 0
+        while i < nr {
+            if tab.cols != ncols {
+                return boila_sql_fail(s, txn, pc, concat("COPY csv: очаквах ", concat(int_to_str(ncols), concat(" колони, получих ", int_to_str(tab.cols)))), "22P04")
+            }
+            let tup: Vec<BoilaVal> = vec_new()
+            let mut c: i64 = 0
+            while c < ncols {
+                let raw = csv_get(tab, i, c)
+                let typ = vec_get(t.cols, vec_get(cix, c)).typ
+                vec_push(tup, boila_copy_cell_val(typ, raw))
+                c = c + 1
+            }
+            vec_push(tuples, tup)
+            i = i + 1
+        }
+    } else {
+        let lines = boila_copy_lines(data)
+        i = 0
+        while i < vec_len(lines) {
+            let fields = boila_copy_split_text(vec_get(lines, i))
+            if vec_len(fields) != ncols {
+                return boila_sql_fail(s, txn, pc, concat("COPY text: очаквах ", concat(int_to_str(ncols), concat(" колони, ред ", int_to_str(i + 1)))), "22P04")
+            }
+            let tup: Vec<BoilaVal> = vec_new()
+            let mut c: i64 = 0
+            while c < ncols {
+                let typ = vec_get(t.cols, vec_get(cix, c)).typ
+                vec_push(tup, boila_copy_cell_val(typ, vec_get(fields, c)))
+                c = c + 1
+            }
+            vec_push(tuples, tup)
+            i = i + 1
+        }
+    }
+    let mut ins = boila_ins_empty()
+    ins.table = t.name
+    ins.cols = colnames
+    ins.rows = tuples
+    let was = txn.active
+    if was == 0 {
+        let b = boila_txn_begin(s, txn, 0, db)?
+        s = b.s
+        txn = b.txn
+    }
+    let ex = boila_exec_insert(s, txn, t, ins)?
+    s = ex.s
+    txn = ex.txn
+    if ex.ok == 0 {
+        txn = boila_txn_rollback(txn)
+        return boila_sql_fail(s, txn, pc, ex.err, ex.state)
+    }
+    if was == 0 {
+        let cmt = boila_txn_commit(s, txn)?
+        s = cmt.s
+        txn = cmt.txn
+        if cmt.ok == 0 {
+            return boila_sql_fail(s, txn, pc, cmt.err, cmt.state)
+        }
+    }
+    return BoilaSqlOut { s: s, txn: txn, pc: pc, ok: 1, err: "", state: "", kind: boila_copy_kind(), res: boila_result_empty(), id: ex.affected }
+}
+
+fn boila_exec_copy(s: BoilaStore, txn: BoilaTxn, db: str, pc: BoilaPlanCache, lx: BoilaLex, data: str) -> BoilaSqlOut !IO !Time !Par {
+    let p = boila_parse_copy(lx)
+    if p.ok == 0 {
+        return boila_sql_fail(s, txn, pc, p.err, p.state)
+    }
+    let ct = boila_cat_by_name_txn(s, txn, p.cp.table)?
+    s = ct.s
+    if ct.ok == 0 {
+        return boila_sql_fail(s, txn, pc, ct.err, ct.state)
+    }
+    if p.cp.dir == 2 {
+        return boila_copy_to(s, txn, pc, ct.table, p.cp)?
+    }
+    if data == "" {
+        return boila_sql_fail(s, txn, pc, "COPY FROM STDIN изисква данни", "42601")
+    }
+    return boila_copy_from(s, txn, pc, db, ct.table, p.cp, data)?
+}

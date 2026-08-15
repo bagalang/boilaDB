@@ -63,6 +63,7 @@ import "../index/secondary.baga"
 import "../txn/mvcc.baga"
 import "exec_drop.baga"
 import "exec_show.baga"
+import "exec_copy.baga"
 import "std/str/str.baga"
 
 // pc_mu=0 → unlocked (tests / single-thread). Serve passes per-db mutex.
@@ -180,6 +181,9 @@ fn boila_exec_sql_mu(s: BoilaStore, txn: BoilaTxn, db: str, sql: str, pc: BoilaP
     }
     if tok_kw(t0, "insert") == 1 || tok_kw(t0, "update") == 1 || tok_kw(t0, "delete") == 1 {
         return boila_exec_sql_dml(s, txn, db, pc, pc_mu, lx)?
+    }
+    if tok_kw(t0, "copy") == 1 {
+        return boila_exec_copy(s, txn, db, pc, lx, "")?
     }
     // W7 fallback (no session map — mt_exec path); server_exec intercepts first
     if tok_kw(t0, "set") == 1 { return boila_exec_set_ok(s, txn, pc) }

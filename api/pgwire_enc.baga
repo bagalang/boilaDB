@@ -320,5 +320,6 @@ fn pgw_tag(kind: i64, affected: i64, nrows: i64) -> str {
     if kind == 28 { return "ALTER ROLE" }
     if kind == 29 { return "GRANT" }
     if kind == 30 { return "REVOKE" }
+    if kind == 31 { return concat("COPY ", int_to_str(affected)) }
     return "OK"
 }

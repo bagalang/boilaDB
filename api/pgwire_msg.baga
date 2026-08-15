@@ -41,6 +41,26 @@ fn pgw_msg(typ: i64, body: bytes) -> bytes {
     return bytes_concat(out, body)
 }
 
+// P14 COPY: 'G' CopyInResponse / 'H' CopyOutResponse / 'd' CopyData / 'c' CopyDone
+fn pgw_copy_resp(typ: i64, natts: i64) -> bytes {
+    let mut body = pgw_one(0)
+    body = bytes_concat(body, pgw_be16(natts))
+    let mut i: i64 = 0
+    while i < natts {
+        body = bytes_concat(body, pgw_be16(0))
+        i = i + 1
+    }
+    return pgw_msg(typ, body)
+}
+
+fn pgw_copy_data_line(line: str) -> bytes {
+    return pgw_msg(100, bytes_of_str(concat(line, "\n")))
+}
+
+fn pgw_copy_done_msg() -> bytes {
+    return pgw_msg(99, bytes_new(0))
+}
+
 // --- readers ---
 
 fn pgw_be_read(b: bytes, off: i64, n: i64) -> i64 {

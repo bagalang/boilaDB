@@ -140,6 +140,11 @@ PRECEDING (ties share the running agg). One OVER spec per query.
 `ROWS`/`RANGE`/`GROUPS` → `0A000`. No `LAG`/`LEAD`/`NTILE`, no
 named `WINDOW`.
 
+**COPY (P14):** `COPY t [(cols)] FROM STDIN | TO STDOUT`
+`[WITH (FORMAT text|csv)]`. Text is tab-separated (`\N` null, `\.`
+end). CSV via csvbaga. Bad row → `22P04` and the implicit txn
+rolls back. No `FROM 'file'`, no binary, no `HEADER`.
+
 **Not yet:** subqueries, more than one JOIN, `INTERSECT`/`EXCEPT ALL`
 on tables (set ops exist on dual only).
 

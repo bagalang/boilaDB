@@ -51,6 +51,15 @@ One session = one database. Switching mid-transaction → `0A000`.
 `DROP` of the session’s current database → `55006`. Default database
 after init: `boila`.
 
+**P18:** `SELECT` may qualify `db.table` (or `db.public.table`) and
+JOIN across local databases without `USE`. DML against a foreign
+database → `0A000` (no 2PC). Local FDW aliases:
+
+```sql
+CREATE SERVER name OPTIONS (database 'other');
+CREATE FOREIGN TABLE t SERVER name;   -- t → other.t
+```
+
 ## DDL
 
 ```sql

@@ -72,6 +72,8 @@ struct BoilaSelItem {
 
 struct BoilaSel {
     table: str,
+    table_db: str,    // P18: empty = session db
+    join_db: str,
     star: i64,
     items: Vec<BoilaSelItem>,
     eq_col: str, has_eq: i64, pk_eq: BoilaVal, eq_param: i64,
@@ -233,7 +235,7 @@ fn boila_sel_empty() -> BoilaSel {
     let hp: Vec<BoilaHavPred> = vec_new()
     let hn: Vec<BoilaHavNode> = vec_new()
     return BoilaSel {
-        table: "", star: 0, items: items,
+        table: "", table_db: "", join_db: "", star: 0, items: items,
         eq_col: "", has_eq: 0, pk_eq: BoilaVal { tag: 0, i: 0, b: bytes_new(0) }, eq_param: 0,
         isnull_mode: 0, isnull_col: "",
         lo_col: "", has_lo: 0, pk_lo: BoilaVal { tag: 0, i: 0, b: bytes_new(0) }, lo_param: 0, lo_excl: 0,

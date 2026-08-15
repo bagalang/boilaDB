@@ -8,6 +8,9 @@ import "../sql/lexer.baga"
 import "../sql/token.baga"
 import "../sql/parse_ddl.baga"
 import "../sql/exec_sql.baga"
+import "../sql/parse_select.baga"
+import "../sql/exec_xdb.baga"
+import "../sql/exec_xdb_ddl.baga"
 import "../sql/exec_copy.baga"
 import "../sql/exec_out.baga"
 import "../sql/exec_show.baga"
@@ -308,6 +311,34 @@ fn boila_server_exec_tx(srv: BoilaServer, txn: BoilaTxn, db: str, sql: str) -> B
     let g = boila_srv_db(srv, db)?
     if g.ok == 0 {
         return boila_srv_out_fail(g.srv, txn, g.err, g.state)
+    }
+    let lx0 = boila_lex(sql)
+    if lx0.err == "" && vec_len(lx0.toks) > 0 && tok_kw(vec_get(lx0.toks, 0), "select") == 1 {
+        let ps = boila_parse_select(lx0)
+        if ps.ok == 1 {
+            let mut sel = ps.sel
+            if sel.table_db == "" {
+                let ft = boila_ft_resolve(g.store, sel.table)?
+                if ft.ok == 1 {
+                    sel.table_db = ft.db
+                    sel.table = ft.name
+                }
+            }
+            if sel.has_join == 1 && sel.join_db == "" {
+                let ft2 = boila_ft_resolve(g.store, sel.join_table)?
+                if ft2.ok == 1 {
+                    sel.join_db = ft2.db
+                    sel.join_table = ft2.name
+                }
+            }
+            if boila_sel_needs_xdb(sel, db) == 1 {
+                let xo = boila_exec_xdb(g.srv, g.store, txn, db, sel, g.srv.pc)?
+                let mut srv2 = boila_srv_store_putback(xo.srv, db, xo.out.s)
+                srv2.pc = xo.out.pc
+                srv2.guc = g.srv.guc
+                return BoilaSrvOut { srv: srv2, txn: xo.out.txn, ok: xo.out.ok, err: xo.out.err, state: xo.out.state, kind: xo.out.kind, res: xo.out.res, id: xo.out.id, db: db }
+            }
+        }
     }
     let out = boila_exec_sql_guc(g.store, txn, db, sql, g.srv.pc, g.srv.guc)?
     let mut srv2 = boila_srv_store_putback(g.srv, db, out.s)

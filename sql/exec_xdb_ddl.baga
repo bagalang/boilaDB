@@ -1,0 +1,121 @@
+// exec_xdb_ddl.baga — CREATE SERVER / CREATE FOREIGN TABLE (P18 local FDW).
+
+import "../storage/shards.baga"
+import "../txn/mvcc.baga"
+import "../core/codec.baga"
+import "../core/value.baga"
+import "../core/row.baga"
+import "exec_out.baga"
+import "exec_scan.baga"
+import "plan_cache.baga"
+import "exec_xdb.baga"
+import "lexer.baga"
+import "token.baga"
+import "parse_qual.baga"
+import "parse_common.baga"
+import "std/str/str.baga"
+
+fn boila_exec_create_server(s: BoilaStore, txn: BoilaTxn, pc: BoilaPlanCache, lx: BoilaLex) -> BoilaSqlOut !IO !Time !Par {
+    // CREATE SERVER name [FOREIGN DATA WRAPPER ident] OPTIONS (database 'db')
+    let n = boila_ps_tok(lx, 2)
+    if n.kind != tok_ident() {
+        return boila_sql_fail(s, txn, pc, "очаквах име след CREATE SERVER", "42601")
+    }
+    let mut i: i64 = 3
+    if tok_kw(boila_ps_tok(lx, i), "foreign") == 1 {
+        if tok_kw(boila_ps_tok(lx, i + 1), "data") != 1 || tok_kw(boila_ps_tok(lx, i + 2), "wrapper") != 1 {
+            return boila_sql_fail(s, txn, pc, "очаквах DATA WRAPPER", "42601")
+        }
+        i = i + 4
+    }
+    if tok_kw(boila_ps_tok(lx, i), "options") != 1 {
+        return boila_sql_fail(s, txn, pc, "очаквах OPTIONS (database '…')", "42601")
+    }
+    i = i + 1
+    if boila_ps_tok(lx, i).kind != tok_lparen() {
+        return boila_sql_fail(s, txn, pc, "очаквах '(' след OPTIONS", "42601")
+    }
+    i = i + 1
+    if tok_kw(boila_ps_tok(lx, i), "database") != 1 && boila_ps_tok(lx, i).txt != "dbname" {
+        return boila_sql_fail(s, txn, pc, "очаквах database в OPTIONS", "0A000")
+    }
+    i = i + 1
+    let v = boila_ps_tok(lx, i)
+    if v.kind != tok_str() {
+        return boila_sql_fail(s, txn, pc, "очаквах низ за database", "42601")
+    }
+    let row: Vec<BoilaVal> = vec_new()
+    vec_push(row, boila_val_str(v.txt))
+    s = boila_put(s, boila_cf_sys(), 1, boila_fdw_srv_pk(n.txt), boila_row_enc(row))?
+    return boila_sql_ok(s, txn, pc, 3, boila_result_empty(), 0)
+}
+
+fn boila_exec_create_ft(s: BoilaStore, txn: BoilaTxn, pc: BoilaPlanCache, lx: BoilaLex) -> BoilaSqlOut !IO !Time !Par {
+    // CREATE FOREIGN TABLE name SERVER srv
+    if tok_kw(boila_ps_tok(lx, 2), "table") != 1 {
+        return boila_sql_fail(s, txn, pc, "очаквах TABLE след FOREIGN", "42601")
+    }
+    let n = boila_ps_tok(lx, 3)
+    if n.kind != tok_ident() {
+        return boila_sql_fail(s, txn, pc, "очаквах име на FOREIGN TABLE", "42601")
+    }
+    if tok_kw(boila_ps_tok(lx, 4), "server") != 1 {
+        return boila_sql_fail(s, txn, pc, "очаквах SERVER", "42601")
+    }
+    let sv = boila_ps_tok(lx, 5)
+    if sv.kind != tok_ident() {
+        return boila_sql_fail(s, txn, pc, "очаквах име на SERVER", "42601")
+    }
+    let g = boila_get(s, boila_cf_sys(), 1, boila_fdw_srv_pk(sv.txt))?
+    s = g.s
+    if g.found == 0 {
+        return boila_sql_fail(s, txn, pc, concat("сървър '", concat(sv.txt, "' не съществува")), "42704")
+    }
+    let srvrow = boila_row_dec(g.val)
+    if vec_len(srvrow) < 1 {
+        return boila_sql_fail(s, txn, pc, "повреден SERVER запис", "XX000")
+    }
+    let dbn = str_of_bytes(vec_get(srvrow, 0).b)
+    let row: Vec<BoilaVal> = vec_new()
+    vec_push(row, boila_val_str(dbn))
+    vec_push(row, boila_val_str(n.txt))
+    s = boila_put(s, boila_cf_sys(), 1, boila_fdw_ft_pk(n.txt), boila_row_enc(row))?
+    return boila_sql_ok(s, txn, pc, 3, boila_result_empty(), 0)
+}
+
+fn boila_ft_resolve(s: BoilaStore, name: str) -> BoilaRel !IO !Time !Par {
+    let g = boila_get(s, boila_cf_sys(), 1, boila_fdw_ft_pk(name))?
+    if g.found == 0 {
+        return BoilaRel { ok: 0, db: "", name: name, pos: 0, err: "", state: "" }
+    }
+    let row = boila_row_dec(g.val)
+    if vec_len(row) < 2 {
+        return BoilaRel { ok: 0, db: "", name: name, pos: 0, err: "", state: "" }
+    }
+    return BoilaRel { ok: 1, db: str_of_bytes(vec_get(row, 0).b), name: str_of_bytes(vec_get(row, 1).b), pos: 0, err: "", state: "" }
+}
+
+fn boila_dml_xdb_guard(lx: BoilaLex, cur: str) -> str {
+    let t0 = boila_ps_tok(lx, 0)
+    let mut i: i64 = 1
+    if tok_kw(t0, "insert") == 1 {
+        if tok_kw(boila_ps_tok(lx, 1), "into") == 1 {
+            i = 2
+        }
+    } else {
+        if tok_kw(t0, "delete") == 1 {
+            if tok_kw(boila_ps_tok(lx, 1), "from") == 1 {
+                i = 2
+            }
+        } else {
+            if tok_kw(t0, "update") != 1 {
+                return ""
+            }
+        }
+    }
+    let r = boila_parse_rel(lx, i)
+    if r.ok == 1 && r.db != "" && r.db != cur {
+        return "DML в чужда база не се поддържа (няма 2PC)"
+    }
+    return ""
+}

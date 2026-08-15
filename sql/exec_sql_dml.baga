@@ -13,7 +13,13 @@ import "../txn/mvcc.baga"
 import "../storage/shards.baga"
 import "token.baga"
 
+import "exec_xdb_ddl.baga"
+
 fn boila_exec_sql_dml(s: BoilaStore, txn: BoilaTxn, db: str, pc: BoilaPlanCache, pc_mu: i64, lx: BoilaLex) -> BoilaSqlOut !IO !Time !Par {
+    let xg = boila_dml_xdb_guard(lx, db)
+    if xg != "" {
+        return boila_sql_fail(s, txn, pc, xg, "0A000")
+    }
     let t0 = vec_get(lx.toks, 0)
     if tok_kw(t0, "insert") == 1 {
         let p = boila_parse_insert(lx)

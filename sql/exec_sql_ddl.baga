@@ -19,8 +19,16 @@ import "../ts/rollup.baga"
 import "token.baga"
 import "std/str/str.baga"
 
+import "exec_xdb_ddl.baga"
+
 fn boila_exec_sql_ddl(s: BoilaStore, txn: BoilaTxn, db: str, pc: BoilaPlanCache, pc_mu: i64, lx: BoilaLex) -> BoilaSqlOut !IO !Time !Par {
     let t1 = vec_get(lx.toks, 1)
+        if tok_kw(t1, "server") == 1 {
+            return boila_exec_create_server(s, txn, pc, lx)?
+        }
+        if tok_kw(t1, "foreign") == 1 {
+            return boila_exec_create_ft(s, txn, pc, lx)?
+        }
         if tok_kw(t1, "table") == 1 {
             let pc2 = boila_parse_create(lx)
             if pc2.ok == 0 {

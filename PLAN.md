@@ -337,14 +337,15 @@ sweeper чете.
 P2 вече държи много бази в един процес, но сесия = една база.
 Първият разрез е **същият процес**, не отдалечен postgres_fdw.
 
-- Квалификация `db.table` (и `db.schema.table` → schema игнориран /
-  само `public`). Planner отваря втората база през `BoilaServer`
-  (вече lazy open) и чете; DML в чужда база → `0A000` до 2PC.
-- `CREATE SERVER …` / `CREATE FOREIGN TABLE` като алиас към локална
-  база (FDW-форма). Отдалечен PG wire FDW — следващ разрез.
-- **Гейт:** две бази, `SELECT a.id FROM sales.inv a JOIN warehouse.sku b
-  ON a.sku = b.id`; USE не е нужен; txn остава в текущата база.
-- Residual: няма cross-db транзакция/2PC; няма remote FDW.
+- Квалификация `db.table` (и `db.public.table`; друга schema →
+  `0A000`). Planner отваря втората база през `BoilaServer` (lazy
+  open) и чете committed редове; DML в чужда база → `0A000`.
+- `CREATE SERVER name OPTIONS (database '…')` +
+  `CREATE FOREIGN TABLE name SERVER name` като алиас към локална база.
+- **Гейт (минат):** `tests/boila_xdb_test` — `SELECT a.id FROM sales.inv a
+  JOIN warehouse.sku b ON a.sku = b.id` без USE; UPDATE чужда база
+  `0A000`; FT alias чете.
+- Residual: няма 2PC; няма remote FDW; xdb JOIN е nested-loop.
 
 ## P19 — raftbaga репликация
 

@@ -1,0 +1,114 @@
+// parse_qual.baga — db.table / db.public.table + alias (P18).
+
+import "token.baga"
+import "lexer.baga"
+import "parse_common.baga"
+import "ast.baga"
+import "std/str/str.baga"
+
+struct BoilaRel {
+    ok: i64,
+    db: str,
+    name: str,
+    pos: i64,
+    err: str,
+    state: str
+}
+
+fn boila_rel_fail(pos: i64, msg: str, state: str) -> BoilaRel {
+    return BoilaRel { ok: 0, db: "", name: "", pos: pos, err: msg, state: state }
+}
+
+fn boila_rel_is_tail(t: Token) -> i64 {
+    if tok_kw(t, "as") == 1 { return 1 }
+    if tok_kw(t, "on") == 1 { return 1 }
+    if tok_kw(t, "where") == 1 { return 1 }
+    if tok_kw(t, "join") == 1 { return 1 }
+    if tok_kw(t, "inner") == 1 { return 1 }
+    if tok_kw(t, "left") == 1 { return 1 }
+    if tok_kw(t, "group") == 1 { return 1 }
+    if tok_kw(t, "having") == 1 { return 1 }
+    if tok_kw(t, "order") == 1 { return 1 }
+    if tok_kw(t, "limit") == 1 { return 1 }
+    if tok_kw(t, "offset") == 1 { return 1 }
+    if t.kind == tok_eof() || t.kind == tok_semi() { return 1 }
+    return 0
+}
+
+fn boila_parse_rel(l: BoilaLex, i: i64) -> BoilaRel {
+    let a = boila_ps_tok(l, i)
+    if a.kind != tok_ident() {
+        return boila_rel_fail(i, "очаквах име на таблица", "42601")
+    }
+    let mut db = ""
+    let mut name = a.txt
+    let mut p = i + 1
+    if boila_ps_tok(l, p).kind == tok_dot() {
+        let b = boila_ps_tok(l, p + 1)
+        if b.kind != tok_ident() {
+            return boila_rel_fail(p, "очаквах идентификатор след '.'", "42601")
+        }
+        p = p + 2
+        if boila_ps_tok(l, p).kind == tok_dot() {
+            let c = boila_ps_tok(l, p + 1)
+            if c.kind != tok_ident() {
+                return boila_rel_fail(p, "очаквах идентификатор след '.'", "42601")
+            }
+            if b.txt != "public" {
+                return boila_rel_fail(p, "само schema public", "0A000")
+            }
+            db = a.txt
+            name = c.txt
+            p = p + 2
+        } else {
+            db = a.txt
+            name = b.txt
+        }
+    }
+    if tok_kw(boila_ps_tok(l, p), "as") == 1 {
+        let al = boila_ps_tok(l, p + 1)
+        if al.kind != tok_ident() {
+            return boila_rel_fail(p, "очаквах alias след AS", "42601")
+        }
+        p = p + 2
+    } else {
+        if boila_ps_tok(l, p).kind == tok_ident() && boila_rel_is_tail(boila_ps_tok(l, p)) == 0 {
+            p = p + 1
+        }
+    }
+    return BoilaRel { ok: 1, db: db, name: name, pos: p, err: "", state: "" }
+}
+
+struct BoilaColRef {
+    ok: i64,
+    col: str,
+    pos: i64,
+    err: str,
+    state: str
+}
+
+fn boila_parse_colref(l: BoilaLex, i: i64) -> BoilaColRef {
+    let a = boila_ps_tok(l, i)
+    if a.kind != tok_ident() {
+        return BoilaColRef { ok: 0, col: "", pos: i, err: "очаквах колона", state: "42601" }
+    }
+    if boila_ps_tok(l, i + 1).kind == tok_dot() {
+        let b = boila_ps_tok(l, i + 2)
+        if b.kind != tok_ident() {
+            return BoilaColRef { ok: 0, col: "", pos: i, err: "очаквах колона след '.'", state: "42601" }
+        }
+        return BoilaColRef { ok: 1, col: b.txt, pos: i + 3, err: "", state: "" }
+    }
+    return BoilaColRef { ok: 1, col: a.txt, pos: i + 1, err: "", state: "" }
+}
+
+fn boila_ps_item_qual(l: BoilaLex, i: i64) -> BoilaPsItem {
+    let t = boila_ps_tok(l, i)
+    if t.kind == tok_ident() && boila_ps_tok(l, i + 1).kind == tok_dot() {
+        let c = boila_ps_tok(l, i + 2)
+        if c.kind == tok_ident() {
+            return boila_ps_item_alias(l, boila_sel_item_col(c.txt), i + 3)
+        }
+    }
+    return boila_ps_item(l, i)
+}

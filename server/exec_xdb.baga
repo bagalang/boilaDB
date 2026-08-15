@@ -1,0 +1,195 @@
+// exec_xdb.baga (server) — P18 cross-database SELECT execution.
+// Lives in server/ because it drives the multi-db registry (BoilaServer).
+// The pure FDW pk helpers + needs-xdb predicate stay in sql/exec_xdb.baga
+// (kimi-deps §3: sql must not import server).
+
+import "databases.baga"
+import "../storage/shards.baga"
+import "../catalog/schema.baga"
+import "../txn/mvcc.baga"
+import "../core/value.baga"
+import "../sql/ast.baga"
+import "../sql/exec_scan.baga"
+import "../sql/exec_out.baga"
+import "../sql/plan_cache.baga"
+import "std/str/str.baga"
+import "std/bytes/bytes.baga"
+
+fn boila_xdb_open(srv: BoilaServer, cur: str, want: str) -> BoilaSrvDb !IO !Time !Par {
+    let mut nm = want
+    if nm == "" {
+        nm = cur
+    }
+    return boila_srv_db(srv, nm)?
+}
+
+struct BoilaXdbOut {
+    srv: BoilaServer,
+    out: BoilaSqlOut
+}
+
+fn boila_xdb_join_row(a: Vec<BoilaVal>, b: Vec<BoilaVal>) -> Vec<BoilaVal> {
+    let out: Vec<BoilaVal> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(a) {
+        vec_push(out, vec_get(a, i))
+        i = i + 1
+    }
+    i = 0
+    while i < vec_len(b) {
+        vec_push(out, vec_get(b, i))
+        i = i + 1
+    }
+    return out
+}
+
+fn boila_xdb_fail(srv: BoilaServer, s: BoilaStore, txn: BoilaTxn, pc: BoilaPlanCache, msg: str, state: str) -> BoilaXdbOut {
+    return BoilaXdbOut { srv: srv, out: boila_sql_fail(s, txn, pc, msg, state) }
+}
+
+fn boila_exec_xdb(srv: BoilaServer, s: BoilaStore, txn: BoilaTxn, db: str, sel: BoilaSel, pc: BoilaPlanCache) -> BoilaXdbOut !IO !Time !Par {
+    let lwant = sel.table_db
+    let rwant = sel.join_db
+    let left = boila_xdb_open(srv, db, lwant)?
+    srv = left.srv
+    if left.ok == 0 {
+        return boila_xdb_fail(srv, s, txn, pc, left.err, left.state)
+    }
+    let mut sL = s
+    if lwant != "" && lwant != db {
+        sL = left.store
+    }
+    let mut txnL = txn
+    if lwant != "" && lwant != db {
+        txnL = boila_txn_new()
+    }
+    let ct = boila_cat_by_name_txn(sL, txnL, sel.table)?
+    sL = ct.s
+    if ct.ok == 0 {
+        return boila_xdb_fail(srv, s, txn, pc, ct.err, ct.state)
+    }
+    let t = ct.table
+    let fL = boila_fetch_all(sL, txnL, t)?
+    sL = fL.s
+    if fL.ok == 0 {
+        return boila_xdb_fail(srv, s, txn, pc, fL.err, fL.state)
+    }
+    if lwant == "" || lwant == db {
+        s = sL
+        txn = fL.txn
+    }
+    let mut rows = fL.rows
+    let mut cols = t.cols
+    if sel.has_join == 1 {
+        let right = boila_xdb_open(srv, db, rwant)?
+        srv = right.srv
+        if right.ok == 0 {
+            return boila_xdb_fail(srv, s, txn, pc, right.err, right.state)
+        }
+        let mut sR = right.store
+        if rwant == "" || rwant == db {
+            sR = s
+        }
+        let mut txnR = txn
+        if rwant != "" && rwant != db {
+            txnR = boila_txn_new()
+        }
+        let ct2 = boila_cat_by_name_txn(sR, txnR, sel.join_table)?
+        sR = ct2.s
+        if ct2.ok == 0 {
+            return boila_xdb_fail(srv, s, txn, pc, ct2.err, ct2.state)
+        }
+        let t2 = ct2.table
+        let fR = boila_fetch_all(sR, txnR, t2)?
+        if fR.ok == 0 {
+            return boila_xdb_fail(srv, s, txn, pc, fR.err, fR.state)
+        }
+        if rwant == "" || rwant == db {
+            s = fR.s
+            txn = fR.txn
+        }
+        let li = boila_col_idx(t, sel.join_lcol)
+        let ri = boila_col_idx(t2, sel.join_rcol)
+        if li < 0 || ri < 0 {
+            return boila_xdb_fail(srv, s, txn, pc, "JOIN колона не съществува", "42703")
+        }
+        let joined: Vec<Vec<BoilaVal>> = vec_new()
+        let mut i: i64 = 0
+        while i < vec_len(fL.rows) {
+            let lr = vec_get(fL.rows, i)
+            let lv = vec_get(lr, li)
+            let mut j: i64 = 0
+            while j < vec_len(fR.rows) {
+                let rr = vec_get(fR.rows, j)
+                if boila_val_cmp(lv, vec_get(rr, ri)) == 0 {
+                    vec_push(joined, boila_xdb_join_row(lr, rr))
+                }
+                j = j + 1
+            }
+            i = i + 1
+        }
+        rows = joined
+        let w: Vec<BoilaColDef> = vec_new()
+        i = 0
+        while i < vec_len(t.cols) {
+            vec_push(w, vec_get(t.cols, i))
+            i = i + 1
+        }
+        i = 0
+        while i < vec_len(t2.cols) {
+            vec_push(w, vec_get(t2.cols, i))
+            i = i + 1
+        }
+        cols = w
+        srv = boila_srv_store_putback(srv, right.name, fR.s)
+    }
+    if lwant != "" && lwant != db {
+        srv = boila_srv_store_putback(srv, left.name, sL)
+    }
+    let res = boila_result_empty()
+    if sel.star == 1 {
+        let mut ci: i64 = 0
+        while ci < vec_len(cols) {
+            let cd = vec_get(cols, ci)
+            boila_result_add_col(res, cd.name, cd.typ)
+            ci = ci + 1
+        }
+        res.rows = rows
+    } else {
+        let mut k: i64 = 0
+        while k < vec_len(sel.items) {
+            let it = vec_get(sel.items, k)
+            let ix = boila_col_idx_of(cols, it.col)
+            if ix < 0 {
+                return boila_xdb_fail(srv, s, txn, pc, concat("колона '", concat(it.col, "' не съществува")), "42703")
+            }
+            let nm = it.col
+            if it.alias != "" {
+                // keep alias as output name
+            }
+            let cd = vec_get(cols, ix)
+            if it.alias != "" {
+                boila_result_add_col(res, it.alias, cd.typ)
+            } else {
+                boila_result_add_col(res, nm, cd.typ)
+            }
+            k = k + 1
+        }
+        let mut ri: i64 = 0
+        while ri < vec_len(rows) {
+            let src = vec_get(rows, ri)
+            let out: Vec<BoilaVal> = vec_new()
+            k = 0
+            while k < vec_len(sel.items) {
+                let it = vec_get(sel.items, k)
+                let ix = boila_col_idx_of(cols, it.col)
+                vec_push(out, vec_get(src, ix))
+                k = k + 1
+            }
+            vec_push(res.rows, out)
+            ri = ri + 1
+        }
+    }
+    let out = BoilaSqlOut { s: s, txn: txn, pc: pc, ok: 1, err: "", state: "", kind: 1, res: res, id: vec_len(res.rows) }
+    return BoilaXdbOut { srv: srv, out: out }
+}

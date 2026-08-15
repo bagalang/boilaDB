@@ -25,7 +25,7 @@ rank() {
     fts | vector | ts | graph) echo 4 ;;
     sql) echo 5 ;;
     server) echo 6 ;;
-    api) echo 7 ;;
+    api | repl) echo 7 ;;
     tools) echo 8 ;;
     *) echo -1 ;;
   esac

@@ -1,5 +1,6 @@
 // exec_dual_ops.baga — dual CAST / binop helpers (Q-dual arith).
 import "../core/value.baga"
+import "../core/numeric.baga"
 import "lexer.baga"
 import "token.baga"
 import "exec_like.baga"
@@ -98,6 +99,7 @@ fn boila_dual_type_tag(nm: str) -> i64 {
     if nm == "bool" || nm == "boolean" { return boila_v_bool() }
     if nm == "text" || nm == "varchar" || nm == "name" { return boila_v_str() }
     if nm == "timestamptz" || nm == "timestamp" { return boila_v_ts() }
+    if nm == "numeric" || nm == "decimal" { return boila_v_num() }
     return 0 - 1
 }
 fn boila_dual_as_str(v: BoilaVal) -> str {
@@ -106,6 +108,9 @@ fn boila_dual_as_str(v: BoilaVal) -> str {
     if v.tag == boila_v_bool() {
         if v.i == 0 { return "f" }
         return "t"
+    }
+    if v.tag == boila_v_num() {
+        return boila_num_to_string(v.b)
     }
     return int_to_str(v.i)
 }
@@ -159,6 +164,11 @@ fn boila_dual_cast(v: BoilaVal, want: i64, pos: i64) -> BoilaDualExpr {
             }
         }
         return boila_dual_fail_ex(pos, "невалиден CAST към bool", "22P02")
+    }
+    if want == boila_v_num() {
+        let c = boila_num_try_cast(v.tag, v.i, v.b)
+        if c.ok == 0 { return boila_dual_fail_ex(pos, c.err, c.state) }
+        return boila_dual_ok(boila_val_num_bytes(c.b), boila_v_num(), "?column?", pos)
     }
     return boila_dual_fail_ex(pos, "CAST тип не се поддържа", "0A000")
 }

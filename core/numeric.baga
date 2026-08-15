@@ -1,0 +1,114 @@
+// numeric.baga — P12 NUMERIC payload (bagadecimal Decimal).
+//
+// On-disk / BoilaVal.b: 16 bytes LE [lo u32][mid u32][hi u32][flags u32].
+// Store always dec_normalize. Semantic cmp via dec_cmp (not byte-order).
+
+import "bagadecimal/src/types.baga"
+import "bagadecimal/src/parse/parse.baga"
+import "bagadecimal/src/format/format.baga"
+import "bagadecimal/src/ops/cmp.baga"
+import "bagadecimal/src/convert/convert.baga"
+import "bagadecimal/src/money/money.baga"
+import "std/bytes/bytes.baga"
+import "std/str/str.baga"
+
+fn boila_num_put_u32(b: bytes, off: i64, n: i64) {
+    let x = n & 4294967295
+    bytes_set(b, off, x & 255)
+    bytes_set(b, off + 1, (x >> 8) & 255)
+    bytes_set(b, off + 2, (x >> 16) & 255)
+    bytes_set(b, off + 3, (x >> 24) & 255)
+}
+
+fn boila_num_get_u32(b: bytes, off: i64) -> i64 {
+    let a = bytes_at(b, off) & 255
+    let c = bytes_at(b, off + 1) & 255
+    let d = bytes_at(b, off + 2) & 255
+    let e = bytes_at(b, off + 3) & 255
+    return a | (c << 8) | (d << 16) | (e << 24)
+}
+
+fn boila_num_pack(d0: Decimal) -> bytes {
+    let d = dec_normalize(d0)
+    let b = bytes_new(16)
+    boila_num_put_u32(b, 0, d.lo)
+    boila_num_put_u32(b, 4, d.mid)
+    boila_num_put_u32(b, 8, d.hi)
+    boila_num_put_u32(b, 12, d.flags)
+    return b
+}
+
+fn boila_num_unpack(b: bytes) -> Decimal {
+    if bytes_len(b) < 16 {
+        return dec_zero()
+    }
+    return dec_from_parts(
+        boila_num_get_u32(b, 0),
+        boila_num_get_u32(b, 4),
+        boila_num_get_u32(b, 8),
+        0,
+        0
+    )
+}
+
+// Reconstruct sign+scale from flags (dec_from_parts would drop them
+// if we pass 0,0). Read flags directly.
+fn boila_num_unpack_full(b: bytes) -> Decimal {
+    if bytes_len(b) < 16 {
+        return dec_zero()
+    }
+    let flags = boila_num_get_u32(b, 12)
+    let lo = boila_num_get_u32(b, 0)
+    let mid = boila_num_get_u32(b, 4)
+    let hi = boila_num_get_u32(b, 8)
+    let mut neg: i64 = 0
+    if (flags & 2147483648) != 0 {
+        neg = 1
+    }
+    let scale = (flags >> 16) & 255
+    return dec_from_parts(lo, mid, hi, neg, scale)
+}
+
+fn boila_num_payload_cmp(a: bytes, b: bytes) -> i64 {
+    return dec_cmp(boila_num_unpack_full(a), boila_num_unpack_full(b))
+}
+
+fn boila_num_parse(s: str) -> DecResult {
+    let p = dec_parse(s)
+    if p.ok == 0 {
+        return p
+    }
+    return dec_ok(dec_normalize(p.value))
+}
+
+fn boila_num_from_i64(n: i64) -> Decimal {
+    return dec_normalize(dec_from_i64(n))
+}
+
+fn boila_num_to_string(b: bytes) -> str {
+    return dec_to_string(boila_num_unpack_full(b))
+}
+
+struct BoilaNumCast {
+    ok: i64,
+    err: str,
+    state: str,
+    b: bytes
+}
+
+fn boila_num_try_cast(tag: i64, i: i64, payload: bytes) -> BoilaNumCast {
+    if tag == 9 {
+        return BoilaNumCast { ok: 1, err: "", state: "", b: payload }
+    }
+    if tag == 2 {
+        return BoilaNumCast { ok: 1, err: "", state: "", b: boila_num_pack(boila_num_from_i64(i)) }
+    }
+    if tag == 5 {
+        let p = boila_num_parse(str_of_bytes(payload))
+        if p.ok == 0 {
+            return BoilaNumCast { ok: 0, err: "невалиден CAST към numeric", state: "22P02", b: bytes_new(0) }
+        }
+        return BoilaNumCast { ok: 1, err: "", state: "", b: boila_num_pack(p.value) }
+    }
+    return BoilaNumCast { ok: 0, err: "невалиден CAST към numeric", state: "22P02", b: bytes_new(0) }
+}

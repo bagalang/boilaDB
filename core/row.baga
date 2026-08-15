@@ -5,6 +5,7 @@
 // собствен делимитър (вж. value.baga).
 
 import "value.baga"
+import "numeric.baga"
 import "codec.baga"
 import "std/json/json.baga"
 import "std/json/json_write.baga"
@@ -59,6 +60,9 @@ fn boila_val_json_lit(v: BoilaVal) -> str {
     }
     if v.tag == boila_v_i64() || v.tag == boila_v_ts() {
         return int_to_str(v.i)
+    }
+    if v.tag == boila_v_num() {
+        return boila_num_to_string(v.b)
     }
     if v.tag == boila_v_json() {
         return str_of_bytes(v.b)

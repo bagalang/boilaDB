@@ -8,3 +8,4 @@ std = { path = "../../std" }
 rocksbaga = { path = "../rocksbaga" }
 httpdbaga = { path = "../httpdbaga" }
 metbaga = { path = "../metbaga" }
+bagadecimal = { path = "../bagadecimal" }

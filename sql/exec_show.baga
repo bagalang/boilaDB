@@ -22,6 +22,7 @@ fn boila_type_name(typ: i64) -> str {
     if typ == boila_v_bytes() { return "bytea" }
     if typ == boila_v_str() { return "text" }
     if typ == boila_v_json() { return "jsonb" }
+    if typ == boila_v_num() { return "numeric" }
     // VECTOR(n) catalog pack: 1000+dim (vector/distance.baga)
     if typ >= 1000 {
         return concat(concat("vector(", int_to_str(typ - 1000)), ")")

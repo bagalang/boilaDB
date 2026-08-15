@@ -19,6 +19,7 @@ there are no double-quoted identifiers.
 | `TEXT` | 5 | raw UTF-8 bytes |
 | `JSONB` | 6 | document-as-column (no separate doc store) |
 | `VECTOR(n)` | 1000+n | fixed-point ×1e6 i32; see [modalities.md](modalities.md) |
+| `NUMERIC` / `DECIMAL` | 9 | bagadecimal 96-bit + scale; PG OID 1700 |
 
 `FLOAT8` is reserved as tag 7 in the value codec (payload only, no
 sort-order — gaps V1) but `CREATE TABLE` does **not** accept it yet.
@@ -27,8 +28,12 @@ Dual/expression arithmetic is integer-only (no floats).
 `NULL` is three-valued: `NULL = NULL` is never true. `IS [NOT] NULL`
 uses the secondary index when present.
 
-**Not in v1:** `NUMERIC`, `SERIAL` / `BIGSERIAL`, `DEFAULT`,
-`NOT NULL`, `REFERENCES`, arrays, usable `FLOAT8` columns.
+**P12:** `NUMERIC` / `DECIMAL` (unconstrained; bagadecimal). Insert
+via text (`'12.50'`) or bigint; `CAST` / `::numeric`.
+
+**Not yet:** `SERIAL` / `BIGSERIAL`, `DEFAULT`, `NOT NULL`,
+`REFERENCES`, arrays, usable `FLOAT8` columns, `NUMERIC(p,s)`
+enforcement, unquoted `12.50` literals.
 
 Every `CREATE TABLE` requires a `PRIMARY KEY`.
 

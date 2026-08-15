@@ -234,21 +234,129 @@
 - `doc/` модалът се разтваря в релационното ядро като JSONB колони.
 - Един writer thread → N write lanes (архитектурният таван на v1).
 
-## После (v2+, извън плана)
-- raftbaga репликация; serializable; `NUMERIC`; window функции; COPY;
-  SCRAM auth; compaction filter за MVCC GC вместо sweeper; cross-database
-  заявки/FDW връзки между базите.
+## P12 — NUMERIC (bagadecimal)
+
+Типът беше извън плана; влиза тук, защото bagadecimal вече е отделен
+пакет с PG text bridge и счетоводният път не трябва да минава през i64.
+
+- `core/numeric.baga` — pack/unpack на `Decimal` в 16 B payload
+  (lo/mid/hi/flags); store винаги `dec_normalize`. Семантично сравнение
+  през `dec_cmp` (не byte-ред — като f64 residual).
+- Value tag **9**. DDL: `NUMERIC` / `DECIMAL` (без enforcement на
+  `NUMERIC(p,s)` в първия разрез).
+- `CAST(x AS numeric)` / `x::numeric` от text/bigint; INSERT coerce
+  от `'12.50'` / `1250`.
+- PG wire OID **1700**; text формат = `dec_to_string`.
+- **Гейт:** `tests/boila_numeric_test` — create/insert/select/cast/
+  restart; `1.0 = 1.00`; кирилица в съседна TEXT колона остава UTF-8.
+- Residual: няма unquoted `12.50` в lexer-а; няма `NUMERIC(p,s)`
+  проверка; secondary index range по NUMERIC е seq (няма sort-order
+  encode); `sum`/`avg` по NUMERIC — P12b.
+
+## P13 — Window функции
+
+- `fn() OVER (PARTITION BY … ORDER BY …)`: `ROW_NUMBER`, `RANK`,
+  `DENSE_RANK`, `SUM`/`AVG`/`COUNT`/`MIN`/`MAX`.
+- Първи разрез: default frame = `RANGE UNBOUNDED PRECEDING`
+  (стандартният PG default за тези fn). `ROWS BETWEEN` → `0A000`.
+- Parser: `WINDOW` вече е резервирана дума; exec след ORDER BY на
+  партицията (преизползва `exec_sort`).
+- **Гейт:** `boila_window_test` — row_number по dept; running sum;
+  restart не пипа резултата (чисто изчисление).
+- Residual: няма named `WINDOW w AS (…)`; няма `NTILE`/`LAG`/`LEAD`
+  в първия разрез.
+
+## P14 — COPY
+
+- SQL: `COPY t (cols) FROM STDIN` / `TO STDOUT` `[WITH (FORMAT csv|text)]`.
+- PG wire: `CopyInResponse` / `CopyOutResponse` / `CopyData` /
+  `CopyDone` / `CopyFail`. Text + CSV (csvbaga).
+- **Гейт:** pgbaga или ръчен framer: 1k реда COPY IN → SELECT count;
+  COPY OUT съвпада; грешен ред → `22P04`/`22P05`, транзакцията rollback.
+- Residual: няма binary COPY, няма `FROM 'file'`, няма `FREEZE`.
+
+## P15 — SCRAM-SHA-256
+
+- PG startup: AuthenticationSASL (10) `SCRAM-SHA-256`; verifier в
+  ACL user row (salt + iter + StoredKey + ServerKey), не cleartext.
+- `std/crypto` SHA-256/HMAC + `ct_eq`. Клиентският път в pgbaga вече
+  говори SCRAM — сървърният кодек се пише в `api/pgwire_scram.baga`.
+- Empty catalog + empty token остава trust. `BOILA_AUTH=scram|cleartext|trust`.
+- **Гейт:** pgbaga connect със SCRAM user; грешна парола → `28P01`;
+  стар cleartext клиент при `BOILA_AUTH=scram` → `28000`.
+- Residual: няма channel binding (`-PLUS`), няма TLS, няма MD5.
+
+## P16 — Compaction filter за MVCC GC
+
+Sweeper-ът (gaps S2) остава fallback. Правилният път е filter в
+rocksbaga при compaction — иначе всеки UPDATE пише + sweeper чете.
+
+- rocksbaga: per-CF compaction filter hook (drop/keep/undecided на
+  ключ+value). boilaDB регистрира filter на data/index CF:
+  drop версии с `lsn < min_active_snapshot`.
+- boilaDB: `txn/gc_filter.baga` + min-snapshot tracker (най-старият
+  отворен BEGIN). Sweeper се включва само ако filter-ът липсва.
+- **Гейт:** 10k UPDATE на един pk → след compact броят версии ≤
+  (1 + #open snapshots); restart + compact не връща мъртви LSN.
+- Residual: filter-ът не реже sys CF; TTL си остава rocksbaga BAGATTL1.
+
+## P17 — Serializable
+
+Днешният модел е едно-сесиен buffered snapshot (T2). Serializable
+изисква rw-конфликт при commit, не пълна SSI от ден 1.
+
+- `BEGIN ISOLATION LEVEL SERIALIZABLE` (и `REPEATABLE READ` = днешният
+  snapshot). Default остава snapshot / read committed-еквивалент.
+- Commit: write-write → `40001`; read-write (пишецът пипа ключ, четен
+  от по-стар snapshot) → `40001`. Predicate/phantom locks — residual.
+- **Гейт:** двама клиенти, A чете ред, B update+commit, A update същия
+  ред → A abort `40001`; без конфликт — и двамата commit.
+- Residual: няма SIREAD по range; няма `DEFERRABLE`.
+
+## P18 — Cross-database заявки / FDW
+
+P2 вече държи много бази в един процес, но сесия = една база.
+Първият разрез е **същият процес**, не отдалечен postgres_fdw.
+
+- Квалификация `db.table` (и `db.schema.table` → schema игнориран /
+  само `public`). Planner отваря втората база през `BoilaServer`
+  (вече lazy open) и чете; DML в чужда база → `0A000` до 2PC.
+- `CREATE SERVER …` / `CREATE FOREIGN TABLE` като алиас към локална
+  база (FDW-форма). Отдалечен PG wire FDW — следващ разрез.
+- **Гейт:** две бази, `SELECT a.id FROM sales.inv a JOIN warehouse.sku b
+  ON a.sku = b.id`; USE не е нужен; txn остава в текущата база.
+- Residual: няма cross-db транзакция/2PC; няма remote FDW.
+
+## P19 — raftbaga репликация
+
+raftbaga днес е **фрагмент** (N=3 in-process, i64 KV, без pre-vote /
+snapshots / membership). Репликацията на boilaDB е **WAL/LSN batch**,
+не KV put.
+
+- Първи разрез: in-process 3 възела; лидерът прилага commit LSN
+  batch към raft log; follower-ите replay-ват същия batch в своя
+  store. `pg_is_in_recovery()` = 1 на follower; писане там → `25006`.
+- Транспорт: канали (като днешния raftbaga). TCP между процеси —
+  след като in-process гейтът мине.
+- **Гейт:** kill лидера → избор; committed редове се четат на новия
+  лидер; uncommitted buffer се губи (като P4 crash).
+- Residual: N=3 фиксирано; няма dynamic membership; няма sync
+  replica за `synchronous_commit`; raftbaga safety не е доказана
+  (`--verify` само на local rules).
 
 ## Рискове
 - **`go/chan` само `i64`** → комуникация с shard нишките през канали +
   cell2 пакети (доказан модел: rocksbaga MT `lsm_mt_*`, queuebaga).
 - **Struct по стойност** → всеки shard се притежава от една нишка;
   worker-ите никога не мутират storage директно.
-- **MVCC GC** — без compaction filter в rocksbaga v1 версията чисти със
-  sweeper; риск от write amplification под тежки update товари →
-  измерва се на P11, не се крие.
+- **MVCC GC** — P16 сменя sweeper с compaction filter; дотогава
+  residual S2 важи. P16 пипа rocksbaga — отделен гейт там.
+- **raftbaga е фрагмент** — P19 не обещава multi-DC Postgres-класа
+  репликация; обещава commit-log apply върху 3 in-process възела.
 - **SQL подмножество** — изкушението "още една SQL функция" е scope creep;
   всяко разширение минава през PLAN + gaps.md, не през кода.
 - **Обхват** — P0–P6 са задължителното ядро (storage→SQL→multi-DB→wire);
-  P7–P10 са независими модали и могат да се пренареждат/режат без да
-  чупят ядрото.
+  P7–P10 са независими модали; P12–P19 са v2 ядро (типове, SQL, auth,
+  изолация, GC, multi-db, репликация) и вървят по този ред заради
+  зависимостите (NUMERIC → windows/COPY; filter → serializable;
+  локален FDW → raft).

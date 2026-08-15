@@ -5,6 +5,18 @@ V = value/codec/vector, K = key/scan, S = storage, M = metrics/monitoring,
 H = HTTP/API, Q = SQL (от P1), C = cache/planner, A = агрегати,
 T = транзакции, W = wire protocol, F = FTS.
 
+## P12–P19 (в плана, 2026-08-15)
+
+Бившият блок „извън плана“ е P12–P19 в PLAN.md. Първи разрез: **P12 NUMERIC**.
+
+- **N1 — NUMERIC tag 9, bagadecimal payload.** Unconstrained
+  `NUMERIC`/`DECIMAL`; `CAST` / `::numeric`; INSERT coerce от text/bigint.
+  Residual: няма unquoted `12.50` в lexer-а; няма `NUMERIC(p,s)`
+  проверка; index range по NUMERIC е seq (няма sort-order encode);
+  `sum`/`avg` по NUMERIC чака P12b.
+- **N2 — Window / COPY / SCRAM / filter-GC / SSI / FDW / raft.**
+  Виж PLAN P13–P19. Не се пипат в P12.
+
 ## Открити 2026-08-13 (ormbaga live + `--rc` serve_pg)
 
 - **RC-SRV — затворен.** `--rc` на `tools/serve_pg.baga` минава
@@ -370,7 +382,7 @@ T = транзакции, W = wire protocol, F = FTS.
   SELECT/INSERT/UPDATE/DELETE/CREATE/DROP/ALTER/CONNECT/ALL on TABLE/`*`/
   DATABASE. Meta `u|`/`a|`. Empty catalog = open. PG: user+pw or token.
   HTTP: Basic user:pass + Bearer/X-Boila-Token. FNS_MAX raised 1024→2048.
-  Residual: no SCRAM/TLS; SET ROLE without pw only for superuser.
+  Residual: no SCRAM/TLS (SCRAM = P15); SET ROLE without pw only for superuser.
 - **W7 — (FIXED) SET/SHOW/RESET/DISCARD session GUC.** SET name {TO|=}
   value → store in `srv.guc` (ST) / `BoilaPgSess.guc` (PG) /
   HTTP-MT `sess_guc` (`http_guc.baga` + keepalive). SHOW reads map then
@@ -597,9 +609,9 @@ T = транзакции, W = wire protocol, F = FTS.
   rocksbaga), не само по pk. pk е доминиращо-вариращата част, така че
   разпределението е ефективно по pk — но не е гарантирано перфектно
   равномерно при къси pk-та. Измерва се на P11.
-- **S2 — MVCC GC (P4+) ще е background sweeper**, докато rocksbaga няма
-  compaction filter. Риск от write amplification под тежки update товари
-  — измерва се на P11, не се крие.
+- **S2 — MVCC GC е sweeper до P16.** Compaction filter в rocksbaga +
+  boilaDB `txn/gc_filter.baga` е P16; дотогава write amplification под
+  тежки UPDATE остава измерен residual, не се крие.
 - **M1 — (FIXED) request counters + build info + /ready.** `boila_mt_stat_*`
   + `/health` version, `/ready` (503 at max_conn), `/metrics`
   `boila_build_info`, PG `server_version` boilaDB 0.1.0.

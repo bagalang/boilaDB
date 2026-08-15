@@ -128,7 +128,8 @@ Honest list so drivers do not guess:
 - No TLS, no SCRAM.
 - No `COPY`, no `LISTEN`/`NOTIFY`, no replication.
 - No `"Quoted"` identifiers — bare names only.
-- No `SERIAL`, `DEFAULT`, `NOT NULL`, `REFERENCES`, `NUMERIC`, arrays.
+- No `SERIAL`, `DEFAULT`, `NOT NULL`, `REFERENCES`, arrays.
+- `NUMERIC` is P12 (OID 1700, text format).
 - `PRIMARY KEY` is mandatory.
 - `DROP INDEX name ON table` — the `ON` clause is required.
 - `avg()` is integer division.

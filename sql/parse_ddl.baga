@@ -3,7 +3,7 @@
 // Граматика:
 //   CREATE TABLE ident ( coldef (, coldef)* [, PRIMARY KEY (ident)] ) [;]
 //   coldef := ident typ
-//   typ := BIGINT | BOOL | TEXT | BYTEA | JSONB | TIMESTAMPTZ
+//   typ := BIGINT | BOOL | TEXT | BYTEA | JSONB | TIMESTAMPTZ | NUMERIC | DECIMAL
 //
 // PRIMARY KEY е задължителен (LSM-friendly, ARCHITECTURE.md §5).
 // Грешки: 42601 syntax_error; 0A000 feature_not_supported (непознат тип).
@@ -53,6 +53,9 @@ fn boila_type_of(name: str) -> i64 {
     }
     if name == "timestamptz" {
         return boila_v_ts()
+    }
+    if name == "numeric" || name == "decimal" {
+        return boila_v_num()
     }
     return 0 - 1
 }

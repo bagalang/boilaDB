@@ -2,6 +2,7 @@
 
 import "pgwire_msg.baga"
 import "../core/value.baga"
+import "../core/numeric.baga"
 import "../sql/exec_scan.baga"
 import "std/bytes/bytes.baga"
 import "std/str/str.baga"
@@ -155,6 +156,7 @@ fn pgw_oid_of(tag: i64) -> i64 {
     if tag == boila_v_ts() { return 1184 }
     if tag == boila_v_bytes() { return 17 }
     if tag == boila_v_json() { return 114 }
+    if tag == boila_v_num() { return 1700 }
     return 25
 }
 
@@ -216,6 +218,9 @@ fn pgw_val_text(v: BoilaVal) -> PgWText {
     }
     if v.tag == boila_v_i64() || v.tag == boila_v_ts() {
         return PgWText { b: bytes_of_str(int_to_str(v.i)), is_null: 0 }
+    }
+    if v.tag == boila_v_num() {
+        return PgWText { b: bytes_of_str(boila_num_to_string(v.b)), is_null: 0 }
     }
     if v.tag == boila_v_bytes() {
         // PG bytea hex формат

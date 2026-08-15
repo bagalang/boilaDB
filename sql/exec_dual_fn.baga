@@ -1,5 +1,6 @@
 // exec_dual_fn.baga — dual call_simple / call_multi / string helpers.
 import "../core/value.baga"
+import "../core/numeric.baga"
 import "lexer.baga"
 import "token.baga"
 import "sfn.baga"
@@ -15,6 +16,7 @@ fn boila_dual_type_name(tag: i64) -> str {
     if tag == boila_v_bytes() { return "bytea" }
     if tag == boila_v_str() { return "text" }
     if tag == boila_v_json() { return "jsonb" }
+    if tag == boila_v_num() { return "numeric" }
     return "unknown"
 }
 fn boila_dual_call_unary(fnm: str, v: BoilaVal, tag: i64, pos: i64) -> BoilaDualExpr {
@@ -162,6 +164,9 @@ fn boila_dual_as_text(v: BoilaVal) -> str {
     if v.tag == boila_v_bool() {
         if v.i == 0 { return "f" }
         return "t"
+    }
+    if v.tag == boila_v_num() {
+        return boila_num_to_string(v.b)
     }
     return int_to_str(v.i)
 }

@@ -131,8 +131,8 @@ rocksbaga при същия хардуер (моделът на scorecard-ите
   се притежава от точно една нишка** (struct по стойност → собственост).
 - `space.baga`/`space_scan.baga` — namespace-нати put/get/scan/del;
   единственото място, което познава физическия layout.
-- `gc.baga` — MVCC version sweep (вж. §6); докато rocksbaga няма
-  compaction filter — background worker, документирано в gaps.md.
+- `gc.baga` — MVCC version sweep (вж. §6); P16 сменя първичния път с
+  rocksbaga compaction filter (sweeper остава fallback, gaps S2).
 - Backup/monitoring: `lsm_checkpoint`, `lsm_backup_*`, `lsm_dbsize`
   per shard.
 
@@ -209,8 +209,8 @@ rocksbaga при същия хардуер (моделът на scorecard-ите
 ## 5. BoilaSQL — обхват на подмножеството
 
 **Типове:** `BOOL`, `BIGINT`, `FLOAT8`, `TEXT`, `BYTEA`, `JSONB`,
-`TIMESTAMPTZ`, `VECTOR(n)`. `NULL` с 3VL. (Без `NUMERIC`, `SERIAL`,
-масиви в v1 — документирано.)
+`TIMESTAMPTZ`, `VECTOR(n)`, `NUMERIC` (P12, bagadecimal). `NULL` с 3VL.
+(Без `SERIAL`, масиви — документирано.)
 
 **DDL:** `CREATE/DROP DATABASE` (сървърно ниво, P2), `CREATE TABLE …
 (PRIMARY KEY задължителен — LSM-friendly)`,
@@ -230,15 +230,16 @@ IS [NOT] NULL AND OR NOT`), `ORDER BY … ASC|DESC [NULLS FIRST|LAST]`,
 `WITH RECURSIVE`, `CASE`, аритметика. Dual (без FROM): литерали
 (bool/NULL), builtins (`version`/`current_*`/`now`/`current_setting`/
 `pg_*`/`COALESCE`/`NULLIF`), `+ - * /` (*/> +-), `||`, `CAST`/`::`.
-  Без подзаявки/window в v1.
+  Подзаявки — не. Window функции — P13.
 
 **Транзакции:** `BEGIN [READ ONLY] / COMMIT / ROLLBACK`, snapshot
-isolation, `$1..$n` prepared statements през extended protocol-а.
+isolation (P17: `SERIALIZABLE` → `40001` на rw-конфликт), `$1..$n`
+prepared statements през extended protocol-а.
 
 **Сесия:** една сесия работи с точно една база (PostgreSQL модел);
 `USE <db>` сменя текущата (MySQL удобство); PG wire-ът носи името на
-базата в startup съобщението (P6). Cross-database заявки/транзакции —
-извън v1 (`0A000`).
+базата в startup съобщението (P6). Cross-database `db.table` / локален
+FDW — P18; 2PC остава извън този разрез (`0A000`).
 
 **Encoding:** **UTF-8 only** (стандарт от P0, не фазова опция). Wire
 ParameterStatus `server_encoding`/`client_encoding` = `UTF8`; storage
@@ -296,16 +297,16 @@ cell2 пакети (доказаният модел на rocksbaga MT и queueba
 
 ## 8. Граници на v1 (честно)
 
-- Един възел. Няма raft/replication/sharding през мрежата (raftbaga е
-  фрагмент). N shard-а са вътрешни, в един процес.
-- Много бази данни на сървъра, но **без cross-database достъп**: една
-  сесия = една база; cross-DB заявки/транзакции са v2+ (вж. PLAN.md).
+- Един възел до P19. P19 = raftbaga commit-log репликация (N=3
+  in-process първо; TCP по-късно). N shard-а остават вътрешни.
+- Много бази на сървъра; сесия = една база за писане. `db.table` четене
+  и локален FDW — P18. Cross-db транзакция/2PC — не.
 - **Geo/GPS: няма.** Без geometry типове, без пространствени индекси, без
   GPS/trajectory ingestion — и не са планирани.
-- SQL подмножество без `NUMERIC`, window функции, подзаявки, serializable.
-- Multi-shard транзакции: snapshot isolation, не 2PC.
-- Auth: cleartext + статичен token по wire; няма per-user ACL/SCRAM в v1.
-- PG wire: само v3, без COPY, без logical replication, без LISTEN/NOTIFY.
+- SQL: `NUMERIC` P12; window P13; `COPY` P14; подзаявки — не.
+- Multi-shard транзакции: snapshot; `SERIALIZABLE` — P17 (не 2PC).
+- Auth: ACL + token/trust сега; SCRAM-SHA-256 — P15. TLS — не.
+- PG wire v3: COPY — P14; няма logical replication / LISTEN/NOTIFY.
 - Encoding: **само UTF-8**; без `client_encoding` смяна, без ICU collation.
 
 ## 9. Правила за размер на файловете (урокът от barabadb)

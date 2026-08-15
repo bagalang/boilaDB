@@ -5,12 +5,17 @@
 // кодирани, така че bytes_cmp(enc(a), enc(b)) == семантичното сравнение
 // (ключово за range scans в storage/).
 //
+// tag 9 = NUMERIC (P12) — payload в b; cmp е семантичен (dec_cmp),
+// не byte-ред (като f64 residual).
+//
 // 3VL: сравнение, в което участва null, връща 2 = unknown
 // (NULL = NULL НЕ е true — обратното на barabadb).
 //
 // GAP V1 (gaps.md): f64 няма sort-order кодировка — езикът още няма
 // f64→i64 bit-cast builtin. f64 колони се пазят payload-only (tag 7),
 // без подредба по стойност.
+
+import "numeric.baga"
 
 struct BoilaVal {
     tag: i64,   // BOILA_V_* константа
@@ -27,8 +32,13 @@ fn boila_v_str() -> i64 { return 5 }
 fn boila_v_json() -> i64 { return 6 }
 fn boila_v_f64_gap() -> i64 { return 7 }
 // tag 8 = VECTOR — payload в b; вж. vector/distance.baga
+fn boila_v_num() -> i64 { return 9 }
 // tag 100 = prepared $N placeholder (W2 DML); i = 1-based param index
 fn boila_v_param() -> i64 { return 100 }
+
+fn boila_val_num_bytes(b: bytes) -> BoilaVal {
+    return BoilaVal { tag: boila_v_num(), i: 0, b: b }
+}
 
 fn boila_val_param(n: i64) -> BoilaVal {
     return BoilaVal { tag: boila_v_param(), i: n, b: bytes_new(0) }
@@ -208,6 +218,9 @@ fn boila_val_cmp(a: BoilaVal, b: BoilaVal) -> i64 {
             return 1
         }
         return 0
+    }
+    if a.tag == boila_v_num() {
+        return boila_num_payload_cmp(a.b, b.b)
     }
     return boila_bytes_cmp(a.b, b.b)
 }

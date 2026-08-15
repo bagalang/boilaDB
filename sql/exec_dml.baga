@@ -8,6 +8,7 @@
 import "../storage/shards.baga"
 import "../core/codec.baga"
 import "../core/value.baga"
+import "../core/numeric.baga"
 import "../core/row.baga"
 import "../catalog/schema.baga"
 import "../index/secondary.baga"
@@ -71,6 +72,16 @@ fn boila_dml_val_ok(typ: i64, v: BoilaVal) -> i64 {
         }
         return 0
     }
+    if typ == boila_v_num() {
+        if v.tag == boila_v_num() || v.tag == boila_v_i64() {
+            return 1
+        }
+        if v.tag == boila_v_str() {
+            let p = boila_num_parse(str_of_bytes(v.b))
+            return p.ok
+        }
+        return 0
+    }
     if v.tag == typ {
         return 1
     }
@@ -82,6 +93,20 @@ fn boila_dml_coerce(typ: i64, v: BoilaVal) -> BoilaVal {
         let c = boila_vec_coerce(v, boila_vec_dim_of(typ))
         if c.ok == 1 {
             return c.v
+        }
+    }
+    if typ == boila_v_num() && v.tag != boila_v_null() && boila_is_param(v) == 0 {
+        if v.tag == boila_v_num() {
+            return v
+        }
+        if v.tag == boila_v_i64() {
+            return boila_val_num_bytes(boila_num_pack(boila_num_from_i64(v.i)))
+        }
+        if v.tag == boila_v_str() {
+            let p = boila_num_parse(str_of_bytes(v.b))
+            if p.ok == 1 {
+                return boila_val_num_bytes(boila_num_pack(p.value))
+            }
         }
     }
     return v

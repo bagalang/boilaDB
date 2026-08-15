@@ -1,6 +1,7 @@
 // exec_agg_hav.baga — Q-havx / Q-havand: HAVING slots + multi-pred eval.
 
 import "../core/value.baga"
+import "../core/numeric.baga"
 import "../catalog/schema.baga"
 import "ast.baga"
 import "token.baga"
@@ -9,6 +10,7 @@ import "exec_agg_extra.baga"
 import "exec_xw.baga"
 import "exec_dual_ops.baga"
 import "std/str/str.baga"
+import "std/bytes/bytes.baga"
 
 // Token-span equality (HAVING expr-agg ↔ projection match).
 fn boila_xtoks_eq(a: Vec<Token>, b: Vec<Token>) -> i64 {
@@ -29,7 +31,8 @@ fn boila_xtoks_eq(a: Vec<Token>, b: Vec<Token>) -> i64 {
 
 struct BoilaHavVal {
     ok: i64,
-    v: i64
+    v: i64,
+    vnum: bytes   // P21-2: packed decimal when the slot is numeric
 }
 
 fn boila_hav_pass(op: str, hv: i64, want: i64) -> i64 {
@@ -43,30 +46,59 @@ fn boila_hav_pass(op: str, hv: i64, want: i64) -> i64 {
     return 0
 }
 
+// P21-2: decimal comparison for NUMERIC HAVING.
+fn boila_hav_pass_num(op: str, hv: bytes, want: bytes) -> i64 {
+    let c = boila_num_payload_cmp(hv, want)
+    if op == "=" && c == 0 { return 1 }
+    if op == ">=" && c >= 0 { return 1 }
+    if op == "<=" && c <= 0 { return 1 }
+    if op == ">" && c > 0 { return 1 }
+    if op == "<" && c < 0 { return 1 }
+    if op == "<>" && c != 0 { return 1 }
+    if op == "!=" && c != 0 { return 1 }
+    return 0
+}
+
 fn boila_hav_slot_val(acc: BoilaAggAcc, hkind: i64, hix: i64) -> BoilaHavVal {
     if hkind == 1 {
-        return BoilaHavVal { ok: 1, v: acc.n }
+        return BoilaHavVal { ok: 1, v: acc.n, vnum: bytes_new(0) }
     }
     if hkind == 2 {
-        return BoilaHavVal { ok: 1, v: vec_get(acc.cnt, hix) }
+        return BoilaHavVal { ok: 1, v: vec_get(acc.cnt, hix), vnum: bytes_new(0) }
     }
     if vec_get(acc.hasv, hix) == 0 {
-        return BoilaHavVal { ok: 0, v: 0 }
+        return BoilaHavVal { ok: 0, v: 0, vnum: bytes_new(0) }
     }
     if hkind == 3 {
-        return BoilaHavVal { ok: 1, v: vec_get(acc.sum, hix) }
+        let ns = vec_get(acc.nsum, hix)
+        if bytes_len(ns) > 0 {
+            return BoilaHavVal { ok: 1, v: 0, vnum: ns }
+        }
+        return BoilaHavVal { ok: 1, v: vec_get(acc.sum, hix), vnum: bytes_new(0) }
     }
     if hkind == 4 {
         let c = vec_get(acc.cnt, hix)
         if c == 0 {
-            return BoilaHavVal { ok: 0, v: 0 }
+            return BoilaHavVal { ok: 0, v: 0, vnum: bytes_new(0) }
         }
-        return BoilaHavVal { ok: 1, v: vec_get(acc.sum, hix) / c }
+        let ns = vec_get(acc.nsum, hix)
+        if bytes_len(ns) > 0 {
+            return BoilaHavVal { ok: 1, v: 0, vnum: boila_num_div_i64_kb(ns, c) }
+        }
+        return BoilaHavVal { ok: 1, v: vec_get(acc.sum, hix) / c, vnum: bytes_new(0) }
     }
     if hkind == 5 {
-        return BoilaHavVal { ok: 1, v: vec_get(acc.minv, hix).i }
+        let mv = vec_get(acc.minv, hix)
+        if mv.tag == boila_v_num() {
+            return BoilaHavVal { ok: 1, v: 0, vnum: mv.b }
+        }
+        return BoilaHavVal { ok: 1, v: mv.i, vnum: bytes_new(0) }
     }
-    return BoilaHavVal { ok: 1, v: vec_get(acc.maxv, hix).i }
+    let xv = vec_get(acc.maxv, hix)
+    if xv.tag == boila_v_num() {
+        return BoilaHavVal { ok: 1, v: 0, vnum: xv.b }
+    }
+    return BoilaHavVal { ok: 1, v: xv.i, vnum: bytes_new(0) }
 }
 
 struct BoilaHavSetup {
@@ -120,8 +152,8 @@ fn boila_hav_setup(cols: Vec<BoilaColDef>, sel: BoilaSel, items0: Vec<BoilaSelIt
                     }
                     if hp.agg == 3 || hp.agg == 4 {
                         let cd = vec_get(cols, ix)
-                        if cd.typ != boila_v_i64() && cd.typ != boila_v_ts() {
-                            return BoilaHavSetup { ok: 0, err: "HAVING sum/avg само върху BIGINT", state: "0A000", items: items, aixs: aixs, slots: slots, n_proj: n_proj }
+                        if cd.typ != boila_v_i64() && cd.typ != boila_v_ts() && cd.typ != boila_v_num() {
+                            return BoilaHavSetup { ok: 0, err: "HAVING sum/avg само върху BIGINT/NUMERIC", state: "0A000", items: items, aixs: aixs, slots: slots, n_proj: n_proj }
                         }
                     }
                     vec_push(items, boila_sel_item_agg(hp.agg, hp.col))
@@ -197,7 +229,19 @@ fn boila_hav_leaf_val(acc: BoilaAggAcc, sel: BoilaSel, slots: Vec<i64>, leaf: i6
     let hv = boila_hav_slot_val(acc, hp.agg, slot)
     let mut one2: i64 = 0
     if hv.ok == 1 {
-        one2 = boila_hav_pass(hp.op, hv.v, hp.val)
+        // P21-2: decimal compare when either side is NUMERIC
+        if bytes_len(hp.vnum) > 0 {
+            if bytes_len(hv.vnum) == 0 {
+                return BoilaHavEmit { ok: 0, err: "HAVING: NUMERIC литерал изисква NUMERIC агрегат", state: "0A000", emit: 0 }
+            }
+            one2 = boila_hav_pass_num(hp.op, hv.vnum, hp.vnum)
+        } else {
+            if bytes_len(hv.vnum) > 0 {
+                one2 = boila_hav_pass_num(hp.op, hv.vnum, boila_num_pack(boila_num_from_i64(hp.val)))
+            } else {
+                one2 = boila_hav_pass(hp.op, hv.v, hp.val)
+            }
+        }
     }
     return BoilaHavEmit { ok: 1, err: "", state: "", emit: one2 }
 }

@@ -232,6 +232,11 @@ column stay decimal-exact — the result is NUMERIC (PG type 1700), no
 i64 truncation. `AVG` keeps at least 6 decimal places. NULLs are
 skipped.
 
+**Numeric HAVING (P21-2):** `HAVING sum(col) > '12.5'` compares the
+decimal literal against a NUMERIC aggregate with decimal semantics; an
+integer literal is also compared decimally against a numeric aggregate.
+A decimal literal against an integer aggregate is refused (`0A000`).
+
 No `DISTINCT` inside aggregates.
 
 ## Transactions

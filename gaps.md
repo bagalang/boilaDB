@@ -5,6 +5,20 @@ V = value/codec/vector, K = key/scan, S = storage, M = metrics/monitoring,
 H = HTTP/API, Q = SQL (от P1), C = cache/planner, A = агрегати,
 T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
 
+## P21 — schema integrity + aggregate completeness (opened 2026-08-15)
+
+- **N2 — (FIXED P21-2) numeric HAVING.** `BoilaHavPred.vnum` carries a
+  packed decimal literal; `HAVING sum/avg/min/max <op> '12.5'` compares
+  via `dec_cmp`; integer literal vs numeric aggregate also compares
+  decimally; decimal literal vs integer aggregate → `0A000`. Gate:
+  `tests/boila_numagg_test` (5 HAVING checks). Residual: HAVING on a
+  non-projected numeric aggregate without GROUP BY (the `boila_agg_extra`
+  path) stays i64-only.
+- **P21-5 — window SUM/AVG over NUMERIC (pending).** P13 frame residual.
+- **P21-1 — multi-column UNIQUE (pending).**
+- **P21-4 — CHECK constraints (pending).**
+- **P21-3 — REFERENCES / foreign keys (pending).**
+
 ## P20 — app-ready (opened 2026-08-15)
 
 - **U1 — (FIXED P20-1) UNIQUE indexes.** `CREATE UNIQUE INDEX`; `23505`
@@ -44,10 +58,10 @@ T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
   accumulator (`BoilaAggAcc.nsum`; empty bytes = i64 slot) accumulated
   with `dec_add`, AVG = `dec_div(sum, cnt)` at emit (scale ≥ 6); output
   column typed numeric (OID 1700); NULLs skipped. Gate:
-  `tests/boila_numagg_test` 15/15 (sum 31.05 / avg 7.7625 / GROUP BY /
+  `tests/boila_numagg_test` (sum 31.05 / avg 7.7625 / GROUP BY /
   restart / i64 no-regression). Residual: overflow keeps the prior
-  accumulator; HAVING carries i64 literals only (no numeric HAVING);
-  window SUM/AVG OVER numeric still i64-only (P13 frame residual).
+  accumulator; window SUM/AVG OVER numeric still i64-only (P13 frame
+  residual, → P21-5). Numeric HAVING fixed at P21-2 (N2).
 - **U5 — (FIXED P20-5) to_char(timestamptz, fmt).** `YYYY MM DD HH24
   HH12 HH MI SS` tokens, literal pass-through (UTF-8 aware); Hinnant
   civil-from-days in `core/civil.baga`. Gate: `tests/boila_tochar_test`

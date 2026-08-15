@@ -12,7 +12,9 @@ import "lexer.baga"
 import "ast.baga"
 import "parse_common.baga"
 import "../core/value.baga"
+import "../core/numeric.baga"
 import "std/str/str.baga"
+import "std/bytes/bytes.baga"
 
 struct BoilaParseHav {
     ok: i64,
@@ -90,7 +92,7 @@ fn boila_ph_one(l: BoilaLex, i: i64, preds: Vec<BoilaHavPred>, nodes: Vec<BoilaH
         if xe.ok == 0 {
             return boila_ph_leaf_fail(xe.err, xe.state, i, preds, nodes)
         }
-        let pred = boila_hav_pred(0, "", xe.item.xtoks, "", 0)
+        let pred = boila_hav_pred(0, "", xe.item.xtoks, "", 0, bytes_new(0))
         let leaf_ix = vec_len(preds)
         vec_push(preds, pred)
         let node_ix = vec_len(nodes)
@@ -142,10 +144,23 @@ fn boila_ph_one(l: BoilaLex, i: i64, preds: Vec<BoilaHavPred>, nodes: Vec<BoilaH
     if hv.ok == 0 {
         return boila_ph_leaf_fail(hv.err, hv.state, p + 1, preds, nodes)
     }
-    if hv.v.tag != boila_v_i64() {
-        return boila_ph_leaf_fail("HAVING стойност — само цяло число", "0A000", p + 1, preds, nodes)
+    // P21-2: i64 literal or a numeric literal (quoted text / numeric tag)
+    let mut vnum = bytes_new(0)
+    let mut ival: i64 = 0
+    if hv.v.tag == boila_v_i64() {
+        ival = hv.v.i
+    } else {
+        if hv.v.tag == boila_v_str() || hv.v.tag == boila_v_num() {
+            let nc = boila_num_try_cast(hv.v.tag, hv.v.i, hv.v.b)
+            if nc.ok == 0 {
+                return boila_ph_leaf_fail("HAVING стойност — невалидно NUMERIC число", "22P02", p + 1, preds, nodes)
+            }
+            vnum = nc.b
+        } else {
+            return boila_ph_leaf_fail("HAVING стойност — число или NUMERIC литерал", "0A000", p + 1, preds, nodes)
+        }
     }
-    let pred = boila_hav_pred(hkind, hcol, hxt, op.txt, hv.v.i)
+    let pred = boila_hav_pred(hkind, hcol, hxt, op.txt, ival, vnum)
     let leaf_ix = vec_len(preds)
     vec_push(preds, pred)
     let node_ix = vec_len(nodes)

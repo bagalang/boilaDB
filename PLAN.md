@@ -449,6 +449,25 @@ With P20-1…P20-5 the dialect covers the general building blocks an
 application schema needs. Concrete applications are separate packages
 and are not tracked in this plan.
 
+## P21 — Schema integrity + aggregate completeness
+
+Goal: finish the schema-constraint surface and the remaining aggregate
+gaps. All sub-phases are application-agnostic.
+
+- **P21-2 — numeric HAVING (LANDED).** `HAVING` accepts a NUMERIC
+  literal (quoted text or numeric) and compares it decimally against a
+  NUMERIC `SUM`/`AVG`/`MIN`/`MAX` aggregate; an integer literal is
+  compared decimally against a numeric aggregate; a decimal literal
+  against an integer aggregate → `0A000`. Files: `sql/ast.baga`
+  (`BoilaHavPred.vnum`), `sql/parse_having.baga`, `sql/exec_agg_hav.baga`.
+  **Gate (passed):** `tests/boila_numagg_test` HAVING checks (gt/gte,
+  int-vs-num, avg, decimal-on-i64 refusal).
+- **P21-5 — window SUM/AVG over NUMERIC.** P13 frame residual.
+- **P21-1 — multi-column UNIQUE index.** Extends P20-1 to `(a, b, …)`.
+- **P21-4 — CHECK constraints.** `CHECK (expr)` enforced on DML.
+- **P21-3 — REFERENCES / foreign keys.** Column/table-level FK with
+  ON DELETE actions.
+
 ## Рискове
 - **`go/chan` само `i64`** → комуникация с shard нишките през канали +
   cell2 пакети (доказан модел: rocksbaga MT `lsm_mt_*`, queuebaga).

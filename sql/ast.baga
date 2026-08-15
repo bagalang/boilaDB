@@ -14,11 +14,12 @@ struct BoilaHavPred {
     col: str,       // "" if count(*) or expr-arg
     xtoks: Vec<Token>, // empty = bare col / *
     op: str,
-    val: i64
+    val: i64,
+    vnum: bytes     // P21-2: packed NUMERIC literal (empty → i64 compare)
 }
 
-fn boila_hav_pred(agg: i64, col: str, xtoks: Vec<Token>, op: str, val: i64) -> BoilaHavPred {
-    return BoilaHavPred { agg: agg, col: col, xtoks: xtoks, op: op, val: val }
+fn boila_hav_pred(agg: i64, col: str, xtoks: Vec<Token>, op: str, val: i64, vnum: bytes) -> BoilaHavPred {
+    return BoilaHavPred { agg: agg, col: col, xtoks: xtoks, op: op, val: val, vnum: vnum }
 }
 
 // Boolean tree over leaf preds (Q-havprec): kind 0=leaf, 1=AND, 2=OR.

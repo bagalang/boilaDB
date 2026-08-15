@@ -216,7 +216,8 @@ projection / dual / WHERE expression spans.
 | `quote_literal` / `quote_ident` / `quote_nullable` / `pg_typeof` | text |
 | `version` / `current_*` / `now` / `current_setting` / `pg_backend_pid` / `pg_is_in_recovery` | session |
 
-`avg` is **integer** division (`sum/cnt` in i64) — gaps A1.
+`avg` over BIGINT is **integer** division (`sum/cnt` in i64) — gaps A1.
+Over NUMERIC it is decimal (P20-4).
 
 ## Aggregates
 
@@ -224,6 +225,11 @@ projection / dual / WHERE expression spans.
 `agg(expr)` and `GROUP BY expr`. `HAVING` is a boolean tree (`AND`
 tighter than `OR`, parentheses). Mix of agg and row expressions on the
 group’s first row.
+
+**NUMERIC (P20-4):** `SUM` / `AVG` / `MIN` / `MAX` over a NUMERIC
+column stay decimal-exact — the result is NUMERIC (PG type 1700), no
+i64 truncation. `AVG` keeps at least 6 decimal places. NULLs are
+skipped.
 
 No `DISTINCT` inside aggregates.
 

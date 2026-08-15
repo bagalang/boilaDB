@@ -114,8 +114,8 @@ fn boila_agg_fold_start(cols: Vec<BoilaColDef>, sel: BoilaSel) -> BoilaAggFold !
                     }
                     if it.agg == 3 || it.agg == 4 {
                         let cd = vec_get(cols, ix)
-                        if cd.typ != boila_v_i64() && cd.typ != boila_v_ts() {
-                            return boila_agg_fold_fail(concat("sum/avg само върху BIGINT колона ('", concat(it.col, "')")), "0A000")
+                        if cd.typ != boila_v_i64() && cd.typ != boila_v_ts() && cd.typ != boila_v_num() {
+                            return boila_agg_fold_fail(concat("sum/avg само върху BIGINT/NUMERIC колона ('", concat(it.col, "')")), "0A000")
                         }
                     }
                     vec_push(aixs, ix)
@@ -192,7 +192,7 @@ fn boila_agg_fold_start(cols: Vec<BoilaColDef>, sel: BoilaSel) -> BoilaAggFold !
         }
         i = 0
         while i < n_proj_aggs {
-            boila_result_add_col(res, boila_agg_item_name(vec_get(agg_items, i)), boila_v_i64())
+            boila_result_add_col(res, boila_agg_item_name(vec_get(agg_items, i)), boila_agg_out_tag(vec_get(agg_items, i), vec_get(aixs, i), cols))
             i = i + 1
         }
     }

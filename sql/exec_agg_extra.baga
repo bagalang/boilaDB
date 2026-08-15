@@ -2,6 +2,7 @@
 // exec_agg.baga държи само exec логиката и импорт-ва този файл.
 
 import "../core/value.baga"
+import "../core/numeric.baga"
 import "../catalog/schema.baga"
 import "ast.baga"
 import "exec_scan.baga"
@@ -12,6 +13,8 @@ struct BoilaAggAcc {
     n: i64,
     cnt: Vec<i64>,
     sum: Vec<i64>,
+    // P20-4: decimal accumulator per slot; empty bytes = i64 slot.
+    nsum: Vec<bytes>,
     hasv: Vec<i64>,
     minv: Vec<BoilaVal>,
     maxv: Vec<BoilaVal>,
@@ -21,6 +24,7 @@ struct BoilaAggAcc {
 fn boila_agg_new_acc(nitems: i64, first_row: Vec<BoilaVal>) -> BoilaAggAcc {
     let cnt: Vec<i64> = vec_new()
     let sum: Vec<i64> = vec_new()
+    let nsum: Vec<bytes> = vec_new()
     let hasv: Vec<i64> = vec_new()
     let mn: Vec<BoilaVal> = vec_new()
     let mx: Vec<BoilaVal> = vec_new()
@@ -29,12 +33,13 @@ fn boila_agg_new_acc(nitems: i64, first_row: Vec<BoilaVal>) -> BoilaAggAcc {
     while i < nitems {
         vec_push(cnt, 0)
         vec_push(sum, 0)
+        vec_push(nsum, bytes_new(0))
         vec_push(hasv, 0)
         vec_push(mn, z)
         vec_push(mx, z)
         i = i + 1
     }
-    return BoilaAggAcc { n: 0, cnt: cnt, sum: sum, hasv: hasv, minv: mn, maxv: mx, first: first_row }
+    return BoilaAggAcc { n: 0, cnt: cnt, sum: sum, nsum: nsum, hasv: hasv, minv: mn, maxv: mx, first: first_row }
 }
 
 // Сериализиран ключ на група от стойностите на group колоните.
@@ -74,6 +79,17 @@ fn boila_bytes_hex(b: bytes) -> str {
         i = i + 1
     }
     return s
+}
+
+// P20-4: output column type of an aggregate slot (NUMERIC sum/avg stays
+// numeric; everything else — incl. count — is bigint).
+fn boila_agg_out_tag(it: BoilaSelItem, cix: i64, cols: Vec<BoilaColDef>) -> i64 {
+    if (it.agg == 3 || it.agg == 4) && cix >= 0 && cix < vec_len(cols) {
+        if vec_get(cols, cix).typ == boila_v_num() {
+            return boila_v_num()
+        }
+    }
+    return boila_v_i64()
 }
 
 fn boila_agg_item_name(it: BoilaSelItem) -> str {
@@ -139,12 +155,19 @@ fn boila_agg_cell(acc: BoilaAggAcc, it: BoilaSelItem, a: i64) -> BoilaVal {
         if vec_get(acc.hasv, a) == 0 {
             return boila_val_null()
         }
+        // P20-4: decimal sum when the slot accumulated NUMERIC values
+        if bytes_len(vec_get(acc.nsum, a)) > 0 {
+            return boila_val_num_bytes(vec_get(acc.nsum, a))
+        }
         return boila_val_i64(vec_get(acc.sum, a))
     }
     if it.agg == 4 {
         let c = vec_get(acc.cnt, a)
         if c == 0 {
             return boila_val_null()
+        }
+        if bytes_len(vec_get(acc.nsum, a)) > 0 {
+            return boila_val_num_bytes(boila_num_div_i64_kb(vec_get(acc.nsum, a), c))
         }
         return boila_val_i64(vec_get(acc.sum, a) / c)
     }

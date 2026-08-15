@@ -1,6 +1,7 @@
 // exec_agg_feed.baga — feed one row + finish emit for hash-agg fold.
 
 import "../core/value.baga"
+import "../core/numeric.baga"
 import "../ts/time_bucket.baga"
 import "ast.baga"
 import "token.baga"
@@ -112,7 +113,7 @@ fn boila_agg_fold_row(st: BoilaAggFold, sel: BoilaSel, row: Vec<BoilaVal>) -> Bo
                 }
                 v = ev.val
                 if (it.agg == 3 || it.agg == 4) && v.tag != boila_v_null() {
-                    if v.tag != boila_v_i64() && v.tag != boila_v_ts() && v.tag != boila_v_bool() {
+                    if v.tag != boila_v_i64() && v.tag != boila_v_ts() && v.tag != boila_v_bool() && v.tag != boila_v_num() {
                         st.ok = 0
                         st.err = "sum/avg изисква числов израз"
                         st.state = "0A000"
@@ -137,7 +138,17 @@ fn boila_agg_fold_row(st: BoilaAggFold, sel: BoilaSel, row: Vec<BoilaVal>) -> Bo
                     }
                 }
                 if it.agg == 3 || it.agg == 4 {
-                    vec_set(acc.sum, a, vec_get(acc.sum, a) + v.i)
+                    // P20-4: NUMERIC values accumulate in the decimal slot
+                    if v.tag == boila_v_num() {
+                        let cur = vec_get(acc.nsum, a)
+                        if bytes_len(cur) == 0 {
+                            vec_set(acc.nsum, a, v.b)
+                        } else {
+                            vec_set(acc.nsum, a, boila_num_add_kb(cur, v.b))
+                        }
+                    } else {
+                        vec_set(acc.sum, a, vec_get(acc.sum, a) + v.i)
+                    }
                 }
             }
         }

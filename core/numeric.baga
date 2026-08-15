@@ -7,6 +7,7 @@ import "bagadecimal/src/types.baga"
 import "bagadecimal/src/parse/parse.baga"
 import "bagadecimal/src/format/format.baga"
 import "bagadecimal/src/ops/cmp.baga"
+import "bagadecimal/src/ops/arith.baga"
 import "bagadecimal/src/convert/convert.baga"
 import "bagadecimal/src/money/money.baga"
 import "std/bytes/bytes.baga"
@@ -111,4 +112,25 @@ fn boila_num_try_cast(tag: i64, i: i64, payload: bytes) -> BoilaNumCast {
         return BoilaNumCast { ok: 1, err: "", state: "", b: boila_num_pack(p.value) }
     }
     return BoilaNumCast { ok: 0, err: "невалиден CAST към numeric", state: "22P02", b: bytes_new(0) }
+}
+
+// P20-4 decimal aggregates (P12b): packed-payload add and divide-by-count.
+// Overflow keeps the prior accumulator (honest residual, no silent wrap).
+fn boila_num_add_kb(acc: bytes, v: bytes) -> bytes {
+    let r = dec_add(boila_num_unpack_full(acc), boila_num_unpack_full(v))
+    if r.ok == 0 {
+        return acc
+    }
+    return boila_num_pack(r.value)
+}
+
+fn boila_num_div_i64_kb(acc: bytes, n: i64) -> bytes {
+    if n == 0 {
+        return acc
+    }
+    let r = dec_div(boila_num_unpack_full(acc), boila_num_from_i64(n))
+    if r.ok == 0 {
+        return acc
+    }
+    return boila_num_pack(r.value)
 }

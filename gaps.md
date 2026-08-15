@@ -40,7 +40,14 @@ T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
   standalone `CREATE SEQUENCE`; DROP TABLE leaves the counter key
   (same policy as the `m|next_*` globals, P11-3); SERIAL must be the
   PK (no auto non-PK columns).
-- **U4 — sum/avg over NUMERIC (P20-4 = P12b, pending).**
+- **U4 — (FIXED P20-4 = P12b) sum/avg over NUMERIC.** Per-slot decimal
+  accumulator (`BoilaAggAcc.nsum`; empty bytes = i64 slot) accumulated
+  with `dec_add`, AVG = `dec_div(sum, cnt)` at emit (scale ≥ 6); output
+  column typed numeric (OID 1700); NULLs skipped. Gate:
+  `tests/boila_numagg_test` 15/15 (sum 31.05 / avg 7.7625 / GROUP BY /
+  restart / i64 no-regression). Residual: overflow keeps the prior
+  accumulator; HAVING carries i64 literals only (no numeric HAVING);
+  window SUM/AVG OVER numeric still i64-only (P13 frame residual).
 - **U5 — to_char(timestamptz, fmt) (P20-5, pending).**
 - **U6 — apps/invoices gate (P20-6, pending).**
 

@@ -415,8 +415,21 @@ gaps of docs/sql.md one at a time.
   **Gate (passed):** `tests/boila_bigserial_test` — 15 checks
   (consecutive ids, explicit ids, per-table counters, rollback reuse,
   refusal cases, restart).
-- **P20-4 — sum/avg over NUMERIC (P12b).** Decimal aggregates for
-  accounting totals.
+- **P20-4 — sum/avg over NUMERIC (P12b, LANDED).** Decimal aggregates
+  for accounting totals. `SUM`/`AVG` accept a NUMERIC column (or a
+  numeric-valued expression) and accumulate in a per-slot bagadecimal
+  payload (`BoilaAggAcc.nsum`, empty for i64 slots); `AVG` divides by
+  the count at emit time (`dec_div`, scale ≥ 6). The output column is
+  typed numeric on the wire (OID 1700). NULLs are skipped. MIN/MAX over
+  NUMERIC already worked (semantic `dec_cmp`). Files:
+  `core/numeric.baga` (`boila_num_add_kb` / `boila_num_div_i64_kb`),
+  `sql/exec_agg_extra.baga`, `sql/exec_agg_fold.baga`,
+  `sql/exec_agg_feed.baga`, `sql/exec_agg_gexpr.baga`.
+  **Gate (passed):** `tests/boila_numagg_test` — 15 checks: sum 31.05,
+  avg 7.7625, GROUP BY totals, min/max, i64 no-regression, restart.
+  Residual: decimal overflow keeps the prior accumulator (no SQLSTATE);
+  HAVING predicates carry integer literals, so HAVING over a numeric
+  aggregate is not useful yet.
 - **P20-5 — to_char(timestamptz, fmt).** Dates on invoices.
 - **P20-6 — apps/invoices (gate).** Schema clients/invoices/items;
   numbering + totals + PDF over the PG wire client.

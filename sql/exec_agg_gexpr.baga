@@ -68,7 +68,12 @@ fn boila_agg_gexpr_schema(cols: Vec<BoilaColDef>, sel: BoilaSel) -> BoilaAggSche
     while i < vec_len(sel.items) {
         let it = vec_get(sel.items, i)
         if it.agg > 0 {
-            boila_result_add_col(res, boila_agg_item_name(it), boila_v_i64())
+            // P20-4: NUMERIC sum/avg keeps the numeric output type
+            let mut acix: i64 = 0 - 2
+            if vec_len(it.xtoks) == 0 {
+                acix = boila_col_idx_of(cols, it.col)
+            }
+            boila_result_add_col(res, boila_agg_item_name(it), boila_agg_out_tag(it, acix, cols))
         } else {
             if it.sfn != "" {
                 let mut t0 = boila_v_str()

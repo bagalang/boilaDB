@@ -1,0 +1,59 @@
+// checks.baga — CHECK constraint encode/decode for the schema-row tail
+// (P21-4). Tokens are stored as (kind, txt) pairs so catalog/ never
+// imports sql/. Evaluation lives in sql/exec_check.baga.
+
+import "../core/value.baga"
+import "ddl_types.baga"
+import "std/str/str.baga"
+import "std/bytes/bytes.baga"
+
+struct BoilaChecksTail {
+    checks: Vec<Vec<BoilaTokP>>,
+    pos: i64
+}
+
+// Append the checks tail: [nchecks, per check: [ntoks, (kind, txt)*]].
+fn boila_checks_enc_tail(sch: Vec<BoilaVal>, checks: Vec<Vec<BoilaTokP>>) -> Vec<BoilaVal> {
+    vec_push(sch, boila_val_i64(vec_len(checks)))
+    let mut i: i64 = 0
+    while i < vec_len(checks) {
+        let ck = vec_get(checks, i)
+        vec_push(sch, boila_val_i64(vec_len(ck)))
+        let mut k: i64 = 0
+        while k < vec_len(ck) {
+            let tp = vec_get(ck, k)
+            vec_push(sch, boila_val_i64(tp.kind))
+            vec_push(sch, boila_val_str(tp.txt))
+            k = k + 1
+        }
+        i = i + 1
+    }
+    return sch
+}
+
+// Decode the tail when present (i points just past the colflags tail).
+fn boila_checks_dec_tail(sch: Vec<BoilaVal>, i0: i64) -> BoilaChecksTail {
+    let checks: Vec<Vec<BoilaTokP>> = vec_new()
+    let mut i = i0
+    if i < vec_len(sch) {
+        let nck = vec_get(sch, i).i
+        i = i + 1
+        let mut c: i64 = 0
+        while c < nck && i < vec_len(sch) {
+            let nt = vec_get(sch, i).i
+            i = i + 1
+            let toks: Vec<BoilaTokP> = vec_new()
+            let mut k: i64 = 0
+            while k < nt && i + 1 < vec_len(sch) {
+                let kd = vec_get(sch, i).i
+                let tx = vec_get(sch, i + 1)
+                vec_push(toks, BoilaTokP { kind: kd, txt: str_of_bytes(tx.b) })
+                i = i + 2
+                k = k + 1
+            }
+            vec_push(checks, toks)
+            c = c + 1
+        }
+    }
+    return BoilaChecksTail { checks: checks, pos: i }
+}

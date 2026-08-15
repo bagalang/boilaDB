@@ -20,7 +20,13 @@ T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
   Residual: window MIN/MAX over NUMERIC still i64-only; multi-OVER-spec
   per query still 0A000 (P13 residual).
 - **P21-1 — multi-column UNIQUE (pending).**
-- **P21-4 — CHECK constraints (pending).**
+- **K2 — (FIXED P21-4) CHECK constraints.** Table-level + column-level
+  `CHECK (expr)`; token spans stored in the schema-row checks tail
+  (`BoilaTokP` kind+txt pairs keep catalog/ free of sql/ imports);
+  re-evaluated per row via the dual evaluator on INSERT/upsert/UPDATE;
+  TRUE/NULL pass, FALSE → `23514`. Gate: `tests/boila_check_test` 15/15
+  incl. restart. Residual: single-table expressions only; per-row
+  re-eval (no caching); no `NOT VALID`.
 - **P21-3 — REFERENCES / foreign keys (pending).**
 
 ## P20 — app-ready (opened 2026-08-15)

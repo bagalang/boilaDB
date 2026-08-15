@@ -1,0 +1,56 @@
+// exec_check.baga — P21-4 CHECK constraint evaluation on DML rows.
+// PG semantics: a CHECK passes when the expression is TRUE or NULL;
+// only an explicit FALSE violates it (SQLSTATE 23514).
+
+import "../catalog/ddl_types.baga"
+import "../catalog/schema.baga"
+import "../core/value.baga"
+import "token.baga"
+import "exec_xw.baga"
+import "std/str/str.baga"
+
+struct BoilaCheckRes {
+    ok: i64,
+    err: str,
+    state: str
+}
+
+// Evaluate every CHECK expression of t against row.
+fn boila_checks_enforce(t: BoilaTable, row: Vec<BoilaVal>) -> BoilaCheckRes !Time {
+    if vec_len(t.checks) == 0 {
+        return BoilaCheckRes { ok: 1, err: "", state: "" }
+    }
+    let names: Vec<str> = vec_new()
+    let mut ci: i64 = 0
+    while ci < vec_len(t.cols) {
+        vec_push(names, vec_get(t.cols, ci).name)
+        ci = ci + 1
+    }
+    let mut k: i64 = 0
+    while k < vec_len(t.checks) {
+        let cksrc = vec_get(t.checks, k)
+        let xtoks: Vec<Token> = vec_new()
+        let mut ti: i64 = 0
+        while ti < vec_len(cksrc) {
+            let p = vec_get(cksrc, ti)
+            vec_push(xtoks, token_new(p.kind, p.txt))
+            ti = ti + 1
+        }
+        let ev = boila_xw_eval(names, xtoks, row)?
+        if ev.ok == 0 {
+            return BoilaCheckRes { ok: 0, err: ev.err, state: ev.state }
+        }
+        let mut viol = 0
+        if ev.val.tag == boila_v_bool() && ev.val.i == 0 {
+            viol = 1
+        }
+        if ev.val.tag == boila_v_i64() && ev.val.i == 0 {
+            viol = 1
+        }
+        if viol == 1 {
+            return BoilaCheckRes { ok: 0, err: concat("CHECK constraint нарушение (израз ", concat(int_to_str(k + 1), ")")), state: "23514" }
+        }
+        k = k + 1
+    }
+    return BoilaCheckRes { ok: 1, err: "", state: "" }
+}

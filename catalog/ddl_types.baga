@@ -18,11 +18,19 @@ struct BoilaColDef {
     def: BoilaVal   // P20-2: DEFAULT value when flags & hasdef
 }
 
+// P21-4: one lexed token of a CHECK expression (kind+txt pair kept at
+// catalog level so catalog/ never imports sql/).
+struct BoilaTokP {
+    kind: i64,
+    txt: str
+}
+
 struct BoilaCreate {
     table: str,
     cols: Vec<BoilaColDef>,
     pk_idx: i64,
-    ttl_sec: i64    // P9: 0 = none; FROM WITH (ttl_days|ttl_sec)
+    ttl_sec: i64,           // P9: 0 = none; FROM WITH (ttl_days|ttl_sec)
+    checks: Vec<Vec<BoilaTokP>>  // P21-4: CHECK expressions (token spans)
 }
 
 // kind: 1=add col, 2=rename table, 3=rename column, 4=drop col
@@ -44,7 +52,8 @@ fn boila_coldef_c(name: str, typ: i64, flags: i64, def: BoilaVal) -> BoilaColDef
 
 fn boila_create_empty() -> BoilaCreate {
     let cols: Vec<BoilaColDef> = vec_new()
-    return BoilaCreate { table: "", cols: cols, pk_idx: 0 - 1, ttl_sec: 0 }
+    let checks: Vec<Vec<BoilaTokP>> = vec_new()
+    return BoilaCreate { table: "", cols: cols, pk_idx: 0 - 1, ttl_sec: 0, checks: checks }
 }
 
 fn boila_alter_empty() -> BoilaAlter {

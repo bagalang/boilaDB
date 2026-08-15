@@ -63,7 +63,7 @@ fn boila_cat_rename_table_txn(s: BoilaStore, txn: BoilaTxn, old_name: str, new_n
     if r2.ok == 0 {
         return BoilaCatTxnRes { s: r2.s, txn: r2.txn, ok: 0, err: r2.err, state: r2.state, table: boila_cat_empty_table(), id: 0 }
     }
-    let t2 = BoilaTable { id: t.id, name: new_name, cols: t.cols, pk_idx: t.pk_idx, ixs: t.ixs, ttl_sec: t.ttl_sec }
+    let t2 = BoilaTable { id: t.id, name: new_name, cols: t.cols, pk_idx: t.pk_idx, ixs: t.ixs, ttl_sec: t.ttl_sec, checks: t.checks }
     return BoilaCatTxnRes { s: r2.s, txn: r2.txn, ok: 1, err: "", state: "", table: t2, id: t.id }
 }
 
@@ -102,7 +102,7 @@ fn boila_cat_rename_col_txn(s: BoilaStore, txn: BoilaTxn, table: str, old_col: s
         }
         i = i + 1
     }
-    let t2 = BoilaTable { id: t.id, name: t.name, cols: ncols, pk_idx: t.pk_idx, ixs: t.ixs, ttl_sec: t.ttl_sec }
+    let t2 = BoilaTable { id: t.id, name: t.name, cols: ncols, pk_idx: t.pk_idx, ixs: t.ixs, ttl_sec: t.ttl_sec, checks: t.checks }
     let r = boila_txn_put(s, txn, boila_cf_sys(), 1, boila_cat_pk_schema(t2.id), boila_row_enc(boila_cat_schema_row(t2)))
     if r.ok == 0 {
         return BoilaCatTxnRes { s: s, txn: r.txn, ok: 0, err: r.err, state: r.state, table: boila_cat_empty_table(), id: 0 }
@@ -139,7 +139,7 @@ fn boila_cat_drop_col_txn(s: BoilaStore, txn: BoilaTxn, table: str, col: str) ->
         vec_push(ncols, vec_get(t.cols, i))
         i = i + 1
     }
-    let t2 = BoilaTable { id: t.id, name: t.name, cols: ncols, pk_idx: t.pk_idx, ixs: t.ixs, ttl_sec: t.ttl_sec }
+    let t2 = BoilaTable { id: t.id, name: t.name, cols: ncols, pk_idx: t.pk_idx, ixs: t.ixs, ttl_sec: t.ttl_sec, checks: t.checks }
     let r = boila_txn_put(s, txn, boila_cf_sys(), 1, boila_cat_pk_schema(t2.id), boila_row_enc(boila_cat_schema_row(t2)))
     if r.ok == 0 {
         return BoilaCatTxnRes { s: s, txn: r.txn, ok: 0, err: r.err, state: r.state, table: boila_cat_empty_table(), id: 0 }

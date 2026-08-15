@@ -34,9 +34,12 @@ via text (`'12.50'`) or bigint; `CAST` / `::numeric`.
 **P20-3:** `SERIAL` / `BIGSERIAL` — auto-number PRIMARY KEY (bigint
 underneath; the column must be the `PRIMARY KEY`).
 
+**P21-4 CHECK:** table-level `CHECK (expr)` (as a column-list element)
+and column-level `col TYPE CHECK (expr)`. Enforced on INSERT / upsert /
+UPDATE; TRUE or NULL passes, FALSE → `23514`. Single-table expressions.
+
 **Not yet:** `REFERENCES`, arrays, usable `FLOAT8` columns,
-`NUMERIC(p,s)` enforcement, unquoted `12.50` literals, `CHECK`
-constraints.
+`NUMERIC(p,s)` enforcement, unquoted `12.50` literals.
 
 Every `CREATE TABLE` requires a `PRIMARY KEY`.
 
@@ -70,9 +73,11 @@ CREATE TABLE [IF NOT EXISTS] t (
   id    BIGINT,
   name  TEXT NOT NULL,
   kind  TEXT NOT NULL DEFAULT 'std',
+  qty   BIGINT CHECK (qty >= 0),
   ts    TIMESTAMPTZ DEFAULT now(),
   body  TEXT,
-  PRIMARY KEY (id)
+  PRIMARY KEY (id),
+  CHECK (qty < 1000000)
 ) [WITH (ttl_days = N | ttl_sec = N)];
 
 ALTER TABLE t ADD COLUMN col TEXT;          -- nullable add-only

@@ -23,6 +23,7 @@ import "exec_buf.baga"
 import "exec_dml.baga"
 import "exec_dml_where.baga"
 import "exec_xw.baga"
+import "exec_check.baga"
 import "std/str/str.baga"
 import "std/bytes/bytes.baga"
 
@@ -139,6 +140,11 @@ fn boila_exec_update(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, upd: BoilaUpd)
             let nnv = boila_dml_notnull_viol(t, new)
             if nnv >= 0 {
                 return boila_dml_fail(s, txn, 7, boila_dml_notnull_msg(t, nnv), "23502")
+            }
+            // P21-4: CHECK проверка върху новия ред
+            let ckr = boila_checks_enforce(t, new)?
+            if ckr.ok == 0 {
+                return boila_dml_fail(s, txn, 7, ckr.err, ckr.state)
             }
             // P20-1: UNIQUE проверка върху новия ред
             let uc = boila_ix_uniq_check_txn(s, txn, t, new, pkenc)

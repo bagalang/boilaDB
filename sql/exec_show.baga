@@ -16,6 +16,25 @@ import "../storage/shards.baga"
 import "std/str/str.baga"
 import "std/bytes/bytes.baga"
 
+// P21-4: CHECK expression rendering (token span → text; strings re-quoted).
+fn boila_show_check_expr(toks: Vec<BoilaTokP>) -> str {
+    let mut out = ""
+    let mut i: i64 = 0
+    while i < vec_len(toks) {
+        let p = vec_get(toks, i)
+        let mut s = p.txt
+        if p.kind == tok_str() {
+            s = concat(concat("'", p.txt), "'")
+        }
+        if i > 0 {
+            out = concat(out, " ")
+        }
+        out = concat(out, s)
+        i = i + 1
+    }
+    return out
+}
+
 // P20-2: DEFAULT literal rendering for SHOW CREATE TABLE.
 fn boila_show_def_lit(v: BoilaVal) -> str {
     if v.tag == boila_v_str() {
@@ -287,6 +306,12 @@ fn boila_show_create_table(s: BoilaStore, txn: BoilaTxn, pc: BoilaPlanCache, tab
     }
     if t.pk_idx >= 0 && t.pk_idx < vec_len(t.cols) {
         ddl = concat(ddl, concat(concat(", PRIMARY KEY (", vec_get(t.cols, t.pk_idx).name), ")"))
+    }
+    // P21-4: CHECK constraints
+    let mut ki: i64 = 0
+    while ki < vec_len(t.checks) {
+        ddl = concat(ddl, concat(concat(", CHECK (", boila_show_check_expr(vec_get(t.checks, ki))), ")"))
+        ki = ki + 1
     }
     ddl = concat(ddl, ")")
     if t.ttl_sec > 0 {

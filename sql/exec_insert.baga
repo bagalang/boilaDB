@@ -22,6 +22,7 @@ import "exec_dml.baga"
 import "exec_insert_write.baga"
 import "exec_proj.baga"
 import "exec_xw.baga"
+import "exec_check.baga"
 import "std/str/str.baga"
 import "std/bytes/bytes.baga"
 import "std/time/time.baga"
@@ -187,6 +188,11 @@ fn boila_insert_one(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ins: BoilaIns, 
     let nnv = boila_dml_notnull_viol(t, full)
     if nnv >= 0 {
         return boila_insert_one_fail(s, txn, boila_dml_notnull_msg(t, nnv), "23502")
+    }
+    // P21-4: CHECK constraints
+    let ckr = boila_checks_enforce(t, full)?
+    if ckr.ok == 0 {
+        return boila_insert_one_fail(s, txn, ckr.err, ckr.state)
     }
     if pkval.tag == boila_v_null() {
         return boila_insert_one_fail(s, txn, "NULL в PRIMARY KEY", "23502")

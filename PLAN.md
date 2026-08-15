@@ -471,7 +471,22 @@ gaps. All sub-phases are application-agnostic.
   **Gate (passed):** `tests/boila_winnum_test` — partition SUM/AVG
   decimal-exact + i64 no-regression; `tests/boila_window_test` green.
 - **P21-1 — multi-column UNIQUE index.** Extends P20-1 to `(a, b, …)`.
-- **P21-4 — CHECK constraints.** `CHECK (expr)` enforced on DML.
+- **P21-4 — CHECK constraints (LANDED).** Table-level `CHECK (expr)`
+  (a list element in CREATE TABLE) and column-level `col TYPE CHECK
+  (expr)`. The expression token span is stored in the schema-row checks
+  tail (`BoilaTokP` kind+txt pairs, so catalog/ never imports sql/) and
+  re-evaluated per row via the shared dual-expression evaluator on
+  INSERT / upsert / UPDATE. PG semantics: TRUE or NULL passes, only
+  FALSE violates (`23514`). SHOW CREATE TABLE renders the checks.
+  Files: `catalog/ddl_types.baga` (`BoilaTokP`, `BoilaCreate.checks`),
+  `catalog/schema.baga` (+ `catalog/checks.baga` enc/dec),
+  `sql/parse_ddl.baga`, `sql/exec_check.baga` (new), wired into
+  `sql/exec_insert.baga`, `sql/exec_insert_write.baga`,
+  `sql/exec_modify.baga`, rendered in `sql/exec_show.baga`.
+  **Gate (passed):** `tests/boila_check_test` — 15 checks (table/column
+  level, NULL-passes, multi-check, INSERT/UPDATE, restart). Residual:
+  CHECK cannot reference other tables; no `NOT VALID` / `NO INHERIT`;
+  per-row re-eval (no caching).
 - **P21-3 — REFERENCES / foreign keys.** Column/table-level FK with
   ON DELETE actions.
 

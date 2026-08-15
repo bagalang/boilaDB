@@ -1,6 +1,8 @@
 // exec_dual_fn.baga — dual call_simple / call_multi / string helpers.
 import "../core/value.baga"
 import "../core/numeric.baga"
+import "../core/civil.baga"
+import "exec_dual_str.baga"
 import "lexer.baga"
 import "token.baga"
 import "sfn.baga"
@@ -139,43 +141,24 @@ fn boila_dual_call_simple(fnm: str, has_arg: i64, arg: str, db: str, guc: Map<st
     }
     return boila_dual_fail_ex(pos, concat("непозната функция '", concat(fnm, "()")), "42883")
 }
-fn boila_dual_upper(s: str) -> str {
-    let mut out = ""
-    let mut i: i64 = 0
-    while i < len(s) {
-        let c = char_at(s, i)
-        if c >= 97 && c <= 122 {
-            out = concat(out, chr(c - 32))
-        } else {
-            out = concat(out, chr(c))
-        }
-        i = i + 1
-    }
-    return out
-}
-fn boila_dual_reverse(s: str) -> str {
-    let mut out = ""
-    let mut i = len(s)
-    while i > 0 {
-        i = i - 1
-        out = concat(out, chr(char_at(s, i)))
-    }
-    return out
-}
-fn boila_dual_as_text(v: BoilaVal) -> str {
-    if v.tag == boila_v_null() { return "" }
-    if v.tag == boila_v_str() { return str_of_bytes(v.b) }
-    if v.tag == boila_v_bool() {
-        if v.i == 0 { return "f" }
-        return "t"
-    }
-    if v.tag == boila_v_num() {
-        return boila_num_to_string(v.b)
-    }
-    return int_to_str(v.i)
-}
 fn boila_dual_call_multi(fnm: str, args: Vec<BoilaVal>, tags: Vec<i64>, pos: i64) -> BoilaDualExpr {
     let n = vec_len(args)
+    if fnm == "to_char" {
+        if n != 2 { return boila_dual_fail_ex(pos, "to_char(timestamptz, fmt) — 2 аргумента", "42883") }
+        let tv = vec_get(args, 0)
+        let fv = vec_get(args, 1)
+        if tv.tag == boila_v_null() || fv.tag == boila_v_null() {
+            return boila_dual_ok(boila_val_null(), boila_v_null(), fnm, pos)
+        }
+        if tv.tag != boila_v_ts() && tv.tag != boila_v_i64() {
+            return boila_dual_fail_ex(pos, "to_char: първият аргумент трябва да е timestamptz", "22023")
+        }
+        if fv.tag != boila_v_str() {
+            return boila_dual_fail_ex(pos, "to_char: форматът трябва да е текст", "22023")
+        }
+        let out = boila_to_char_ts(tv.i, str_of_bytes(fv.b))
+        return boila_dual_ok(boila_val_str(out), boila_v_str(), fnm, pos)
+    }
     if fnm == "nullif" {
         if n != 2 { return boila_dual_fail_ex(pos, "NULLIF(a,b) — точно 2 аргумента", "42883") }
         let a0 = vec_get(args, 0)

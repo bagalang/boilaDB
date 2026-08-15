@@ -430,7 +430,19 @@ gaps of docs/sql.md one at a time.
   Residual: decimal overflow keeps the prior accumulator (no SQLSTATE);
   HAVING predicates carry integer literals, so HAVING over a numeric
   aggregate is not useful yet.
-- **P20-5 — to_char(timestamptz, fmt).** Dates on invoices.
+- **P20-5 — to_char(timestamptz, fmt) (LANDED).** Dates on invoices.
+  `to_char(ts, fmt)` formats a timestamptz (i64 µs) to text. Tokens:
+  `YYYY MM DD HH24 HH12 HH MI SS`; anything else copies through
+  literally (UTF-8 aware). Civil-date breakdown is the all-integer
+  Hinnant algorithm (`core/civil.baga`, new); works for pre-1970 dates
+  too (floor division). Registered in the sfn registry so it works in
+  dual, table projections, and WHERE expression spans. Files:
+  `core/civil.baga`, `sql/sfn.baga`, `sql/exec_dual_fn.baga` (+ string
+  helpers split out to `sql/exec_dual_str.baga` for the line gate).
+  **Gate (passed):** `tests/boila_tochar_test` — 8 checks (epoch,
+  next-day, HH24:MI:SS, leap-day 29/02/1972, DD/MM/YYYY, dual now()).
+  Residual: no `Mon`/`Month`/`Day` names, no `US`/`TZ` fields, no
+  locale; numeric `to_char` not supported (timestamptz only).
 - **P20-6 — apps/invoices (gate).** Schema clients/invoices/items;
   numbering + totals + PDF over the PG wire client.
 

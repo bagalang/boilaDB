@@ -1,0 +1,156 @@
+// civil.baga — proleptic Gregorian breakdown + to_char (P20-5).
+//
+// timestamptz is i64 microseconds since 1970-01-01 UTC. civil_from_days
+// is the Howard Hinnant algorithm (all-integer, no floats). Supported
+// to_char tokens: YYYY MM DD HH24 HH12 HH MI SS; any other text is
+// copied literally (UTF-8 aware).
+
+import "std/str/str.baga"
+import "std/bytes/bytes.baga"
+
+struct BoilaCivil {
+    y: i64,
+    m: i64,
+    d: i64
+}
+
+fn boila_floor_div(a: i64, b: i64) -> i64 {
+    if a >= 0 {
+        return a / b
+    }
+    return (a - b + 1) / b
+}
+
+// days since 1970-01-01 → (year, month, day). Hinnant civil_from_days.
+fn boila_civil_from_days(days: i64) -> BoilaCivil {
+    let z = days + 719468
+    let era = boila_floor_div(z, 146097)
+    let doe = z - era * 146097
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+    let mut y = yoe + era * 400
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+    let mp = (5 * doy + 2) / 153
+    let d = doy - (153 * mp + 2) / 5 + 1
+    let mut m = mp + 3
+    if mp >= 10 {
+        m = mp - 9
+    }
+    if m <= 2 {
+        y = y + 1
+    }
+    return BoilaCivil { y: y, m: m, d: d }
+}
+
+// zero-pad to width 2 (values 0..99).
+fn boila_fmt2(n: i64) -> str {
+    if n < 10 {
+        return concat("0", int_to_str(n))
+    }
+    return int_to_str(n)
+}
+
+// year padded to at least 4 digits.
+fn boila_fmt_year(y: i64) -> str {
+    if y >= 1000 && y <= 9999 {
+        return int_to_str(y)
+    }
+    let s = int_to_str(y)
+    let mut out = s
+    let mut i = len(s)
+    while i < 4 {
+        out = concat("0", out)
+        i = i + 1
+    }
+    return out
+}
+
+// UTF-8 char length from the leading byte.
+fn boila_utf8_len(b: i64) -> i64 {
+    if b < 128 {
+        return 1
+    }
+    if b < 224 {
+        return 2
+    }
+    if b < 240 {
+        return 3
+    }
+    return 4
+}
+
+// slice str as bytes [i, j) back to str.
+fn boila_civ_slice(fb: bytes, i: i64, j: i64) -> str {
+    if j <= i || i < 0 || j > bytes_len(fb) {
+        return ""
+    }
+    return str_of_bytes(bytes_slice(fb, i, j))
+}
+
+// to_char(timestamptz us, fmt). Unknown tokens pass through literally.
+fn boila_to_char_ts(us: i64, fmt: str) -> str {
+    let day_us: i64 = 86400000000
+    let days = boila_floor_div(us, day_us)
+    let rem = us - days * day_us
+    let civ = boila_civil_from_days(days)
+    let sec = rem / 1000000
+    let hh24 = sec / 3600
+    let mi = (sec - (sec / 3600) * 3600) / 60
+    let ss = sec - (sec / 60) * 60
+    let mut hh12 = hh24 - (hh24 / 12) * 12
+    if hh12 == 0 {
+        hh12 = 12
+    }
+    let fb = bytes_of_str(fmt)
+    let n = bytes_len(fb)
+    let mut out = ""
+    let mut i: i64 = 0
+    while i < n {
+        let tk4 = boila_civ_slice(fb, i, i + 4)
+        let tk3 = boila_civ_slice(fb, i, i + 3)
+        let tk2 = boila_civ_slice(fb, i, i + 2)
+        if tk4 == "YYYY" {
+            out = concat(out, boila_fmt_year(civ.y))
+            i = i + 4
+        } else {
+            if tk4 == "HH24" {
+                out = concat(out, boila_fmt2(hh24))
+                i = i + 4
+            } else {
+                if tk4 == "HH12" {
+                    out = concat(out, boila_fmt2(hh12))
+                    i = i + 4
+                } else {
+                    if tk2 == "MM" {
+                        out = concat(out, boila_fmt2(civ.m))
+                        i = i + 2
+                    } else {
+                        if tk2 == "DD" {
+                            out = concat(out, boila_fmt2(civ.d))
+                            i = i + 2
+                        } else {
+                            if tk2 == "HH" {
+                                out = concat(out, boila_fmt2(hh12))
+                                i = i + 2
+                            } else {
+                                if tk2 == "MI" {
+                                    out = concat(out, boila_fmt2(mi))
+                                    i = i + 2
+                                } else {
+                                    if tk2 == "SS" {
+                                        out = concat(out, boila_fmt2(ss))
+                                        i = i + 2
+                                    } else {
+                                        let cl = boila_utf8_len(bytes_at(fb, i) & 255)
+                                        out = concat(out, boila_civ_slice(fb, i, i + cl))
+                                        i = i + cl
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return out
+}

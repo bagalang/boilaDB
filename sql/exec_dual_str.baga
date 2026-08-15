@@ -1,0 +1,45 @@
+// exec_dual_str.baga — dual string helpers (split out of exec_dual_fn.baga
+// at P20-5 for the ≤400-line gate).
+
+import "../core/value.baga"
+import "../core/numeric.baga"
+import "std/str/str.baga"
+import "std/bytes/bytes.baga"
+
+fn boila_dual_upper(s: str) -> str {
+    let mut out = ""
+    let mut i: i64 = 0
+    while i < len(s) {
+        let c = char_at(s, i)
+        if c >= 97 && c <= 122 {
+            out = concat(out, chr(c - 32))
+        } else {
+            out = concat(out, chr(c))
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn boila_dual_reverse(s: str) -> str {
+    let mut out = ""
+    let mut i = len(s)
+    while i > 0 {
+        i = i - 1
+        out = concat(out, chr(char_at(s, i)))
+    }
+    return out
+}
+
+fn boila_dual_as_text(v: BoilaVal) -> str {
+    if v.tag == boila_v_null() { return "" }
+    if v.tag == boila_v_str() { return str_of_bytes(v.b) }
+    if v.tag == boila_v_bool() {
+        if v.i == 0 { return "f" }
+        return "t"
+    }
+    if v.tag == boila_v_num() {
+        return boila_num_to_string(v.b)
+    }
+    return int_to_str(v.i)
+}

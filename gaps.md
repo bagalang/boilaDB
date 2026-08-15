@@ -48,7 +48,12 @@ T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
   restart / i64 no-regression). Residual: overflow keeps the prior
   accumulator; HAVING carries i64 literals only (no numeric HAVING);
   window SUM/AVG OVER numeric still i64-only (P13 frame residual).
-- **U5 — to_char(timestamptz, fmt) (P20-5, pending).**
+- **U5 — (FIXED P20-5) to_char(timestamptz, fmt).** `YYYY MM DD HH24
+  HH12 HH MI SS` tokens, literal pass-through (UTF-8 aware); Hinnant
+  civil-from-days in `core/civil.baga`. Gate: `tests/boila_tochar_test`
+  8/8 (incl. leap day 29/02/1972, pre-1970-safe). Residual: no
+  month/day names, no AM/PM, no TZ fields; timestamptz only (no numeric
+  to_char).
 - **U6 — apps/invoices gate (P20-6, pending).**
 
 ## P12–P19 (в плана, 2026-08-15)

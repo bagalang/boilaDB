@@ -59,8 +59,14 @@ fn boila_exec_sql_ddl(s: BoilaStore, txn: BoilaTxn, db: str, pc: BoilaPlanCache,
             }
             return BoilaSqlOut { s: s, txn: txn, pc: boila_pc_invalidate_mu(pc, pc_mu)?, ok: 1, err: "", state: "", kind: 2, res: boila_result_empty(), id: cr.id }
         }
-        if tok_kw(t1, "index") == 1 {
-            let p = boila_parse_create_ix2(lx)
+        // P20-1: CREATE INDEX / CREATE UNIQUE INDEX
+        let mut ix_mode: i64 = 0
+        if tok_kw(t1, "index") == 1 { ix_mode = 1 }
+        if tok_kw(t1, "unique") == 1 && vec_len(lx.toks) > 2 && tok_kw(vec_get(lx.toks, 2), "index") == 1 { ix_mode = 2 }
+        if ix_mode > 0 {
+            let mut p = boila_pix2_fail("", "42601")
+            if ix_mode == 1 { p = boila_parse_create_ix2(lx) }
+            if ix_mode == 2 { p = boila_parse_create_unique_ix(lx) }
             if p.ok == 0 {
                 return boila_sql_fail(s, txn, pc, p.err, p.state)
             }
@@ -95,7 +101,7 @@ fn boila_exec_sql_ddl(s: BoilaStore, txn: BoilaTxn, db: str, pc: BoilaPlanCache,
                 }
                 return BoilaSqlOut { s: s, txn: txn, pc: boila_pc_invalidate_mu(pc, pc_mu)?, ok: 1, err: "", state: "", kind: 15, res: boila_result_empty(), id: hx.id }
             }
-            let ix = boila_ix_create(s, txn, ct.table, p.ix.ix_name, p.ix.col)?
+            let ix = boila_ix_create(s, txn, ct.table, p.ix.ix_name, p.ix.col, p.uniq)?
             s = ix.s
             txn = ix.txn
             if ix.ok == 0 {

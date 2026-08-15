@@ -8,6 +8,7 @@ import "../core/value.baga"
 import "../core/row.baga"
 import "../catalog/schema.baga"
 import "../index/secondary.baga"
+import "../index/uniq.baga"
 import "../fts/fts.baga"
 import "../vector/hnsw.baga"
 import "../vector/hnsw_store.baga"
@@ -134,6 +135,13 @@ fn boila_exec_update(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, upd: BoilaUpd)
                 vec_set(new, vec_get(six, c), boila_dml_coerce(cd.typ, v))
                 c = c + 1
             }
+            // P20-1: UNIQUE проверка върху новия ред
+            let uc = boila_ix_uniq_check_txn(s, txn, t, new, pkenc)
+            if uc.ok == 0 {
+                return boila_dml_fail(s, txn, 7, uc.err, uc.state)
+            }
+            s = uc.s
+            txn = uc.txn
             let xd = boila_ix_del_all_txn(s, txn, t, old, pkenc)
             if xd.ok == 0 {
                 return boila_dml_fail(s, txn, 7, xd.err, xd.state)

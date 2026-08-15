@@ -9,6 +9,7 @@ import "../core/value.baga"
 import "../core/row.baga"
 import "../catalog/schema.baga"
 import "../index/secondary.baga"
+import "../index/uniq.baga"
 import "../fts/fts.baga"
 import "../vector/hnsw.baga"
 import "../vector/hnsw_store.baga"
@@ -53,6 +54,13 @@ fn boila_insert_upsert(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ins: BoilaIn
         vec_set(new, vec_get(prep.ocix, c), boila_dml_coerce(cd.typ, v))
         c = c + 1
     }
+    // P20-1: UNIQUE проверка върху новия ред (преди del/put)
+    let uc = boila_ix_uniq_check_txn(s, txn, t, new, pkenc)
+    if uc.ok == 0 {
+        return boila_insert_one_fail(s, txn, uc.err, uc.state)
+    }
+    s = uc.s
+    txn = uc.txn
     // стари index entries навън
     let xd = boila_ix_del_all_txn(s, txn, t, old, pkenc)
     if xd.ok == 0 {
@@ -123,6 +131,13 @@ fn boila_insert_upsert(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ins: BoilaIn
 
 // Plain INSERT (без конфликт): нов ред + index entries + sync на модалите.
 fn boila_insert_put(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ins: BoilaIns, prep: BoilaInsPrep, ftsl: BoilaFtsList, hnswl: BoilaHnswList, grpl: BoilaGraphList, rul: BoilaRuList, full: Vec<BoilaVal>, pkenc: bytes) -> BoilaInsOne !IO !Time !Par {
+    // P20-1: UNIQUE проверка преди писането
+    let uc = boila_ix_uniq_check_txn(s, txn, t, full, pkenc)
+    if uc.ok == 0 {
+        return boila_insert_one_fail(s, txn, uc.err, uc.state)
+    }
+    s = uc.s
+    txn = uc.txn
     let pw = boila_txn_put_ex(s, txn, boila_cf_data(), t.id, pkenc, boila_row_enc(full), t.ttl_sec)
     if pw.ok == 0 {
         return boila_insert_one_fail(s, txn, pw.err, pw.state)

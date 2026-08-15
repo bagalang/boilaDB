@@ -91,6 +91,13 @@ DROP GRAPH [IF EXISTS] name ON t;
 `SHOW TABLES` · `SHOW INDEX[ES] FROM t` · `SHOW COLUMNS FROM t` /
 `DESCRIBE t` / `DESC t` · `SHOW CREATE TABLE t`.
 
+**UNIQUE (P20-1):** `CREATE UNIQUE INDEX` rejects a duplicate non-NULL
+value with `23505` on INSERT / UPDATE / `ON CONFLICT DO UPDATE`. NULLs
+are distinct (many NULL rows are allowed, as in PostgreSQL). Creating a
+unique index on a column that already contains duplicates fails with
+`23505` and rolls back. `UNIQUE` is not accepted with `USING hnsw`.
+Single-column only.
+
 `TABLE t [WHERE …] [ORDER BY …] [LIMIT …]` is sugar for
 `SELECT * FROM t …`.
 

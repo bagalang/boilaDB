@@ -1,0 +1,221 @@
+// uniq.baga — UNIQUE index enforcement (P20-1).
+//
+// PG semantics: duplicate non-NULL value on a UNIQUE index → 23505.
+// NULLs are distinct (multiple NULL rows allowed). The check merges
+// storage (prefix scan) with the txn buffer: buffered puts/dels of
+// data rows override committed index state seen by the scan.
+// Build-time duplicate detection for CREATE UNIQUE INDEX: entries are
+// sorted as [len(enc) u32 BE][enc][pk] — equal encodings group
+// adjacent regardless of width (a separator-free trick: the length
+// prefix keeps a short encoding from prefix-matching a longer one).
+
+import "../storage/shards.baga"
+import "../core/codec.baga"
+import "../core/value.baga"
+import "../core/row.baga"
+import "../catalog/schema.baga"
+import "../txn/mvcc.baga"
+import "std/str/str.baga"
+import "std/bytes/bytes.baga"
+
+fn boila_uniq_has_prefix(b: bytes, pre: bytes) -> i64 {
+    if bytes_len(b) < bytes_len(pre) {
+        return 0
+    }
+    let mut i: i64 = 0
+    while i < bytes_len(pre) {
+        if bytes_at(b, i) != bytes_at(pre, i) {
+            return 0
+        }
+        i = i + 1
+    }
+    return 1
+}
+
+fn boila_uniq_fail_msg(t: BoilaTable, m: BoilaIxMeta) -> str {
+    let mut cn = "?"
+    if m.col_idx >= 0 && m.col_idx < vec_len(t.cols) {
+        cn = vec_get(t.cols, m.col_idx).name
+    }
+    return concat(concat("дублирана стойност в UNIQUE индекс върху '", cn), "'")
+}
+
+// Entry key prefix for (ix_id, value) — same layout as secondary.baga
+// boila_ix_entry_pk without the pk tail.
+fn boila_uniq_pref(ix_id: i64, v: BoilaVal) -> bytes {
+    return bytes_concat(boila_enc_u32_be(ix_id), boila_val_enc(v))
+}
+
+// Storage candidates: pks whose committed index entry is (ix_id, v).
+struct BoilaUniqCands {
+    s: BoilaStore,
+    pks: Vec<bytes>
+}
+
+fn boila_uniq_storage_cands(s: BoilaStore, t: BoilaTable, ix_id: i64, v: BoilaVal) -> BoilaUniqCands !IO !Time !Par {
+    let pks: Vec<bytes> = vec_new()
+    let full_pref = boila_key_row(boila_cf_index(), t.id, boila_uniq_pref(ix_id, v))
+    let plen = bytes_len(full_pref)
+    let sa = boila_scan_pref_all(s, full_pref)?
+    s = sa.s
+    let mut j: i64 = 0
+    while j < vec_len(sa.keys) {
+        let k = vec_get(sa.keys, j)
+        vec_push(pks, bytes_slice(k, plen, bytes_len(k)))
+        j = j + 1
+    }
+    return BoilaUniqCands { s: s, pks: pks }
+}
+
+// Data row of cand as seen by this txn: found/is_del/val-at-col from
+// the buffer when present, else committed state assumed (the storage
+// index entry proves the committed value).
+fn boila_uniq_cand_holds(txn: BoilaTxn, t: BoilaTable, cand: bytes, col_idx: i64, v: BoilaVal) -> i64 {
+    let dix = boila_txn_find(txn, boila_cf_data(), t.id, cand)
+    if dix < 0 {
+        return 1
+    }
+    let dw = vec_get(txn.writes, dix)
+    if dw.is_del == 1 {
+        return 0
+    }
+    let row = boila_row_dec(dw.row)
+    if col_idx >= vec_len(row) {
+        return 0
+    }
+    if boila_val_cmp(vec_get(row, col_idx), v) == 0 {
+        return 1
+    }
+    return 0
+}
+
+// DML check: row (full decoded values) about to be written under pkenc.
+// 23505 when another live row already holds the value on any UNIQUE ix.
+fn boila_ix_uniq_check_txn(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, row: Vec<BoilaVal>, pkenc: bytes) -> BoilaTxnRes !IO !Time !Par {
+    let mut i: i64 = 0
+    while i < vec_len(t.ixs) {
+        let m = vec_get(t.ixs, i)
+        if m.uniq == 1 && m.col_idx < vec_len(row) {
+            let v = vec_get(row, m.col_idx)
+            if v.tag != boila_v_null() {
+                // committed candidates (prefix scan)
+                let lc = boila_uniq_storage_cands(s, t, m.id, v)?
+                s = lc.s
+                let mut j: i64 = 0
+                while j < vec_len(lc.pks) {
+                    let cand = vec_get(lc.pks, j)
+                    if bytes_eq_b(cand, pkenc) == 0 && boila_uniq_cand_holds(txn, t, cand, m.col_idx, v) == 1 {
+                        return boila_txn_res(s, txn, 0, boila_uniq_fail_msg(t, m), "23505", 0)
+                    }
+                    j = j + 1
+                }
+                // buffered candidates (entries written in this txn)
+                let pref = boila_uniq_pref(m.id, v)
+                let plen = bytes_len(pref)
+                let mut k: i64 = 0
+                while k < vec_len(txn.writes) {
+                    let w = vec_get(txn.writes, k)
+                    if w.cf == boila_cf_index() && w.table_id == t.id && w.is_del == 0 && bytes_len(w.pk) > plen && boila_uniq_has_prefix(w.pk, pref) == 1 {
+                        let cand = bytes_slice(w.pk, plen, bytes_len(w.pk))
+                        if bytes_eq_b(cand, pkenc) == 0 {
+                            let dix = boila_txn_find(txn, boila_cf_data(), t.id, cand)
+                            let mut dead = 0
+                            if dix >= 0 && vec_get(txn.writes, dix).is_del == 1 {
+                                dead = 1
+                            }
+                            if dead == 0 {
+                                return boila_txn_res(s, txn, 0, boila_uniq_fail_msg(t, m), "23505", 0)
+                            }
+                        }
+                    }
+                    k = k + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    return boila_txn_res(s, txn, 1, "", "", 0)
+}
+
+// --- CREATE UNIQUE INDEX build: duplicate detection over (val, pk) ---
+
+fn boila_uniq_entry(v: BoilaVal, pk: bytes) -> bytes {
+    let enc = boila_val_enc(v)
+    let mut out = boila_enc_u32_be(bytes_len(enc))
+    out = bytes_concat(out, enc)
+    return bytes_concat(out, pk)
+}
+
+fn boila_uniq_qs_ins(es: Vec<bytes>, lo: i64, hi: i64) {
+    let mut i: i64 = lo + 1
+    while i <= hi {
+        let key = vec_get(es, i)
+        let mut j = i - 1
+        while j >= lo && boila_bytes_cmp(vec_get(es, j), key) > 0 {
+            vec_set(es, j + 1, vec_get(es, j))
+            j = j - 1
+        }
+        vec_set(es, j + 1, key)
+        i = i + 1
+    }
+}
+
+fn boila_uniq_qs_part(es: Vec<bytes>, lo: i64, hi: i64) -> i64 {
+    let pivot = vec_get(es, lo + (hi - lo) / 2)
+    let mut i = lo - 1
+    let mut j = hi + 1
+    let go = true
+    while go {
+        i = i + 1
+        while boila_bytes_cmp(vec_get(es, i), pivot) < 0 {
+            i = i + 1
+        }
+        j = j - 1
+        while boila_bytes_cmp(vec_get(es, j), pivot) > 0 {
+            j = j - 1
+        }
+        if i >= j {
+            return j
+        }
+        let tmp = vec_get(es, i)
+        vec_set(es, i, vec_get(es, j))
+        vec_set(es, j, tmp)
+    }
+    return j
+}
+
+fn boila_uniq_qs(es: Vec<bytes>, lo: i64, hi: i64) {
+    if hi - lo < 12 {
+        boila_uniq_qs_ins(es, lo, hi)
+        return
+    }
+    let p = boila_uniq_qs_part(es, lo, hi)
+    boila_uniq_qs(es, lo, p)
+    boila_uniq_qs(es, p + 1, hi)
+}
+
+// entries: boila_uniq_entry(val, pk) for every non-NULL val. Returns 1
+// when two distinct pks share a value.
+fn boila_ix_build_has_dup(entries: Vec<bytes>) -> i64 {
+    let n = vec_len(entries)
+    if n < 2 {
+        return 0
+    }
+    boila_uniq_qs(entries, 0, n - 1)
+    let mut i: i64 = 1
+    while i < n {
+        let a = vec_get(entries, i - 1)
+        let b = vec_get(entries, i)
+        if bytes_len(a) >= 4 && bytes_len(b) >= 4 {
+            let la = boila_dec_u32_be(a, 0)
+            let lb = boila_dec_u32_be(b, 0)
+            if la == lb && bytes_len(a) >= 4 + la && bytes_len(b) >= 4 + la {
+                if boila_bytes_cmp(bytes_slice(a, 4, 4 + la), bytes_slice(b, 4, 4 + la)) == 0 {
+                    return 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    return 0
+}

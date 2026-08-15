@@ -36,7 +36,8 @@ struct BoilaCatTxnRes {
 struct BoilaIxMeta {
     id: i64,
     col_idx: i64,
-    name: str
+    name: str,
+    uniq: i64     // P20-1: 1 = UNIQUE index (23505 on duplicate)
 }
 
 struct BoilaTable {
@@ -95,6 +96,24 @@ fn boila_cat_schema_row(t: BoilaTable) -> Vec<BoilaVal> {
         let m = vec_get(t.ixs, i)
         vec_push(sch, boila_val_i64(m.id))
         vec_push(sch, boila_val_i64(m.col_idx))
+        i = i + 1
+    }
+    // P20-1 tail: [nuniq, (uniq ix_id)*] — old rows have no tail.
+    let mut nu: i64 = 0
+    i = 0
+    while i < vec_len(t.ixs) {
+        if vec_get(t.ixs, i).uniq == 1 {
+            nu = nu + 1
+        }
+        i = i + 1
+    }
+    vec_push(sch, boila_val_i64(nu))
+    i = 0
+    while i < vec_len(t.ixs) {
+        let m = vec_get(t.ixs, i)
+        if m.uniq == 1 {
+            vec_push(sch, boila_val_i64(m.id))
+        }
         i = i + 1
     }
     return sch
@@ -231,9 +250,28 @@ fn boila_cat_decode_schema(s: BoilaStore, name: str, id: i64, sch_row: bytes) ->
         while k < nix && i + 1 < vec_len(sch) {
             let xid = vec_get(sch, i)
             let xcol = vec_get(sch, i + 1)
-            vec_push(ixs, BoilaIxMeta { id: xid.i, col_idx: xcol.i, name: "" })
+            vec_push(ixs, BoilaIxMeta { id: xid.i, col_idx: xcol.i, name: "", uniq: 0 })
             i = i + 2
             k = k + 1
+        }
+        // P20-1 tail: [nuniq, (uniq ix_id)*]; absent on pre-P20 rows.
+        if i < vec_len(sch) {
+            let nu = vec_get(sch, i).i
+            i = i + 1
+            let mut k2: i64 = 0
+            while k2 < nu && i < vec_len(sch) {
+                let uid = vec_get(sch, i).i
+                i = i + 1
+                let mut j: i64 = 0
+                while j < vec_len(ixs) {
+                    let m = vec_get(ixs, j)
+                    if m.id == uid {
+                        vec_set(ixs, j, BoilaIxMeta { id: m.id, col_idx: m.col_idx, name: m.name, uniq: 1 })
+                    }
+                    j = j + 1
+                }
+                k2 = k2 + 1
+            }
         }
     }
     let tg = boila_ttl_get(s, id)?

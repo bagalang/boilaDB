@@ -16,6 +16,7 @@ import "../core/value.baga"
 import "../core/row.baga"
 import "../catalog/schema.baga"
 import "../txn/mvcc.baga"
+import "uniq.baga"
 import "std/str/str.baga"
 import "std/bytes/bytes.baga"
 
@@ -70,8 +71,9 @@ fn boila_ix_by_col_t(t: BoilaTable, col_idx: i64) -> i64 {
 // CREATE INDEX (P4): изцяло през txn buffer-а — каталог, schema rewrite,
 // брояч и build entries се commit-ват атомно заедно (auto-txn в exec_sql).
 // Build: pk списък през boila_txn_keys (storage + buffer), без писания
-// по време на събирането.
-fn boila_ix_create(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ix_name: str, col_name: str) -> BoilaIxTxnRes !IO !Time !Par {
+// по време на събирането. P20-1: uniq=1 → UNIQUE; build-ът отказва 23505
+// при съществуващи дубликати (NULL-ите са distinct, PG).
+fn boila_ix_create(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ix_name: str, col_name: str, uniq: i64) -> BoilaIxTxnRes !IO !Time !Par {
     // колоната съществува ли
     let mut col_idx: i64 = 0 - 1
     let mut i: i64 = 0
@@ -133,7 +135,7 @@ fn boila_ix_create(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ix_name: str, co
         vec_push(newixs, vec_get(t.ixs, i))
         i = i + 1
     }
-    vec_push(newixs, BoilaIxMeta { id: next, col_idx: col_idx, name: ix_name })
+    vec_push(newixs, BoilaIxMeta { id: next, col_idx: col_idx, name: ix_name, uniq: uniq })
     let t2 = BoilaTable { id: t.id, name: t.name, cols: t.cols, pk_idx: t.pk_idx, ixs: newixs, ttl_sec: t.ttl_sec }
     let r3 = boila_txn_put(s, txn, boila_cf_sys(), 1, boila_cat_pk_schema(t.id), boila_row_enc(boila_cat_schema_row(t2)))
     if r3.ok == 0 {
@@ -143,6 +145,7 @@ fn boila_ix_create(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ix_name: str, co
     // build: събери pk-та (storage + buffer), после buffer-ирай entries
     let ks = boila_txn_keys(s, txn, t.id)?
     s = ks.s
+    let dup_entries: Vec<bytes> = vec_new()
     let mut ki: i64 = 0
     while ki < vec_len(ks.pks) {
         let pkenc = vec_get(ks.pks, ki)
@@ -152,6 +155,9 @@ fn boila_ix_create(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ix_name: str, co
             let row = boila_row_dec(g3.row)
             if col_idx < vec_len(row) {
                 let v = vec_get(row, col_idx)
+                if uniq == 1 && v.tag != boila_v_null() {
+                    vec_push(dup_entries, boila_uniq_entry(v, pkenc))
+                }
                 let r4 = boila_txn_put(s, txn, boila_cf_index(), t.id, boila_ix_entry_pk(next, v, pkenc), bytes_new(0))
                 if r4.ok == 0 {
                     return BoilaIxTxnRes { s: s, txn: r4.txn, ok: 0, err: r4.err, state: r4.state, id: 0 }
@@ -160,6 +166,9 @@ fn boila_ix_create(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ix_name: str, co
             }
         }
         ki = ki + 1
+    }
+    if uniq == 1 && boila_ix_build_has_dup(dup_entries) == 1 {
+        return BoilaIxTxnRes { s: s, txn: txn, ok: 0, err: concat("дублирани стойности при CREATE UNIQUE INDEX '", concat(ix_name, "'")), state: "23505", id: 0 }
     }
     return BoilaIxTxnRes { s: s, txn: txn, ok: 1, err: "", state: "", id: next }
 }

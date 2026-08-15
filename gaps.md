@@ -3,7 +3,29 @@
 Попълва се с всяка фаза (моделът на rocksbaga/docs/gaps.md). Буквите:
 V = value/codec/vector, K = key/scan, S = storage, M = metrics/monitoring,
 H = HTTP/API, Q = SQL (от P1), C = cache/planner, A = агрегати,
-T = транзакции, W = wire protocol, F = FTS.
+T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
+
+## P20 — app-ready / invoicing probe (opened 2026-08-15)
+
+- **U1 — (FIXED P20-1) UNIQUE indexes.** `CREATE UNIQUE INDEX`; `23505`
+  on INSERT / UPDATE / ON CONFLICT DO UPDATE; NULLs distinct (PG);
+  storage prefix scan merged with the txn buffer (buffered put/del
+  overrides committed state; a buffered UPDATE that moved the value
+  clears its old candidacy); build-time duplicate refusal via sorted
+  `[len][enc][pk]` entries (O(n log n)); uniq flag in a backward-
+  compatible schema-row tail (pre-P20 rows decode uniq=0; every
+  rewrite path goes through `boila_cat_schema_row` so ALTER / DROP
+  INDEX / RENAME preserve it). Gate: `tests/boila_unique_test` 20/20
+  incl. restart. Residual: no UNIQUE over VECTOR/FTS columns; no
+  deferred constraints; the check is one prefix scan per unique column
+  per DML row (same cost class as an indexed eq SELECT — the K7-safe
+  path, not a full scan); multi-column unique not supported
+  (single-column indexes only, same as plain CREATE INDEX).
+- **U2 — NOT NULL + DEFAULT (P20-2, pending).**
+- **U3 — BIGSERIAL (P20-3, pending).**
+- **U4 — sum/avg over NUMERIC (P20-4 = P12b, pending).**
+- **U5 — to_char(timestamptz, fmt) (P20-5, pending).**
+- **U6 — apps/invoices gate (P20-6, pending).**
 
 ## P12–P19 (в плана, 2026-08-15)
 

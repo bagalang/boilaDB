@@ -363,6 +363,38 @@ LSN ticket** в raft log, не суров KV put.
   dynamic membership; няма `synchronous_commit`; raft safety не е
   доказана (`--verify` само на local rules).
 
+## P20 — Application readiness (invoicing probe)
+
+Goal: the SQL surface a real application cannot do without. The probe
+application is an invoicing program (`apps/invoices`, P20-6): numbered
+invoices, NUMERIC money, dates, PDF. The sub-phases close the "Not yet"
+gaps of docs/sql.md one at a time.
+
+- **P20-1 — UNIQUE indexes (LANDED).** `CREATE UNIQUE INDEX name ON
+  t (col)`; a duplicate non-NULL value → `23505` on INSERT / UPDATE /
+  ON CONFLICT DO UPDATE; NULLs are distinct (PG). The check merges
+  storage (prefix scan) with the txn buffer (a buffered put/del
+  overrides the committed state, including an UPDATE that moved the
+  value). CREATE on a table with existing duplicates → `23505`
+  (build-time sort-detect, O(n log n)). The uniq flag lives in a
+  backward-compatible tail of the schema row (old rows decode as
+  uniq=0). Files: `index/uniq.baga`, `index/secondary.baga`,
+  `catalog/schema.baga`, `sql/parse_index.baga`, `sql/exec_sql_ddl.baga`,
+  `sql/exec_insert_write.baga`, `sql/exec_modify.baga`.
+  **Gate (passed):** `tests/boila_unique_test` — 20 checks (incl.
+  same-txn buffer collision, delete-then-insert in one txn, restart).
+- **P20-2 — NOT NULL + DEFAULT.** Column constraints in CREATE TABLE;
+  DEFAULT literal or `now()`; INSERT omitting the column → default;
+  NULL into NOT NULL → `23502`.
+- **P20-3 — BIGSERIAL.** Auto-number PRIMARY KEY (INSERT without the PK
+  column → next value; per-table counter in the sys CF; RETURNING gives
+  it back).
+- **P20-4 — sum/avg over NUMERIC (P12b).** Decimal aggregates for
+  accounting totals.
+- **P20-5 — to_char(timestamptz, fmt).** Dates on invoices.
+- **P20-6 — apps/invoices (gate).** Schema clients/invoices/items;
+  numbering + totals + PDF over the PG wire client.
+
 ## Рискове
 - **`go/chan` само `i64`** → комуникация с shard нишките през канали +
   cell2 пакети (доказан модел: rocksbaga MT `lsm_mt_*`, queuebaga).

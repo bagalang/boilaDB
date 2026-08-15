@@ -211,13 +211,20 @@ rocksbaga при същия хардуер (моделът на scorecard-ите
 
 **Типове:** `BOOL`, `BIGINT`, `FLOAT8`, `TEXT`, `BYTEA`, `JSONB`,
 `TIMESTAMPTZ`, `VECTOR(n)`, `NUMERIC` (P12, bagadecimal). `NULL` с 3VL.
-(Без `SERIAL`, масиви — документирано.)
+`SERIAL`/`BIGSERIAL` — P20-3 (авто-номер PRIMARY KEY). (Без масиви —
+документирано.)
 
 **DDL:** `CREATE/DROP DATABASE` (сървърно ниво, P2), `CREATE TABLE …
 (PRIMARY KEY задължителен — LSM-friendly)`,
-`CREATE [UNIQUE] INDEX ON t (col)`, `CREATE INDEX … USING hnsw`,
+`CREATE [UNIQUE] INDEX ON t (col [, col…])` (P21-1 многоколонен),
+`CREATE INDEX … USING hnsw`,
 `ALTER TABLE ADD COLUMN` (само nullable/add-only), `DROP TABLE/INDEX`,
 `WITH (ttl_days = N | ttl_sec = N)`.
+
+**Integrity (P20-2/P21):** `NOT NULL` / `DEFAULT` (литерал | `now()`),
+`CHECK (expr)` (table/column level; `23514`), `REFERENCES parent (pcol)`
++ `FOREIGN KEY` с `ON DELETE {NO ACTION|RESTRICT|CASCADE|SET NULL}`
+(`23503`), `UNIQUE` многоколонен (`23505`).
 
 **DML:** `INSERT … VALUES (…$1…) … [ON CONFLICT DO NOTHING |
 DO UPDATE SET …] [RETURNING …]`, `UPDATE … SET … WHERE … [RETURNING]`,
@@ -308,7 +315,9 @@ cell2 пакети (доказаният модел на rocksbaga MT и queueba
 - **Geo/GPS: няма.** Без geometry типове, без пространствени индекси, без
   GPS/trajectory ingestion — и не са планирани.
 - SQL: `NUMERIC` P12; window P13; `COPY` P14 (STDIN/STDOUT text|csv);
-  подзаявки — не.
+  подзаявки — не. Integrity: NOT NULL/DEFAULT + SERIAL P20-2/P20-3;
+  CHECK, REFERENCES/FK (ON DELETE), многоколонен UNIQUE, numeric
+  HAVING/window — P21.
 - Multi-shard транзакции: snapshot; `SERIALIZABLE` — P17 (не 2PC).
 - Auth: ACL + token/trust; SCRAM-SHA-256 (P15, auto ако user е s1).
   TLS — не.

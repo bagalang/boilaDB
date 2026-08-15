@@ -16,7 +16,7 @@ root (`ARCHITECTURE.md`, `PLAN.md`, `gaps.md`).
 | [HTTP API](http.md) | `/sql`, `/health`, `/ready`, `/metrics`, session db, CSRF |
 | [PostgreSQL wire](pgwire.md) | `psql` / libpq / pgbaga / ormbaga on port 6575 |
 | [Modalities](modalities.md) | FTS (BM25), VECTOR/HNSW, time-series, graph |
-| [Security](security.md) | Trust, token, users/ACL, GRANT/REVOKE |
+| [Security](security.md) | Trust, token, SCRAM-SHA-256, users/ACL, GRANT/REVOKE |
 | [Operations](operations.md) | Workers, locks, metrics, benches, file-size / layer gates |
 
 ## Design notes (package root)
@@ -24,7 +24,7 @@ root (`ARCHITECTURE.md`, `PLAN.md`, `gaps.md`).
 | Document | Role |
 |----------|------|
 | [ARCHITECTURE.md](../ARCHITECTURE.md) | Modular monolith, layers, concurrency, v1 bounds |
-| [PLAN.md](../PLAN.md) | Phases P0–P11 and measured gates |
+| [PLAN.md](../PLAN.md) | Phases P0–P21 and measured gates |
 | [gaps.md](../gaps.md) | Honest residuals (fixed + still open) |
 | [kimi-deps.md](../kimi-deps.md) | One-way import discipline (`scripts/deps.sh`) |
 

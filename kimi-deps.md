@@ -29,9 +29,8 @@
    catalog drop/truncate/alter = core schema/data/index only.
 5. **index → catalog и index → fts/vector. — FIXED (D5)**
    `ix_drop` = secondary only; FTS/HNSW drop in modal wipe modules;
-   cascade in `exec_drop`. Residual: `index:catalog` (schema rewrite on
-   secondary drop — legitimate catalog use) kept in grandfather until
-   secondary defs move fully under catalog.
+   cascade in `exec_drop`. `index↔catalog` е позволен sibling ръб
+   (§3, един rank) — не е в grandfather; gate-ът е 0 изключения.
 
 Допустими (надолу по диаграмата, не се пипат): модали → catalog/storage/txn,
 graph → catalog/drop, api → sql/catalog, всички → core.

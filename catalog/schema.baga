@@ -19,6 +19,7 @@ import "../core/value.baga"
 import "../core/row.baga"
 import "ddl_types.baga"
 import "checks.baga"
+import "fks.baga"
 import "ttl.baga"
 import "../txn/mvcc.baga"
 import "std/str/str.baga"
@@ -48,7 +49,8 @@ struct BoilaTable {
     pk_idx: i64,
     ixs: Vec<BoilaIxMeta>,
     ttl_sec: i64,   // P9; 0 = none
-    checks: Vec<Vec<BoilaTokP>>   // P21-4: CHECK expressions (token spans)
+    checks: Vec<Vec<BoilaTokP>>,  // P21-4: CHECK expressions (token spans)
+    fks: Vec<BoilaFk>             // P21-3: foreign keys
 }
 
 struct BoilaCatRes {
@@ -64,7 +66,8 @@ fn boila_cat_empty_table() -> BoilaTable {
     let cols: Vec<BoilaColDef> = vec_new()
     let ixs: Vec<BoilaIxMeta> = vec_new()
     let checks: Vec<Vec<BoilaTokP>> = vec_new()
-    return BoilaTable { id: 0, name: "", cols: cols, pk_idx: 0 - 1, ixs: ixs, ttl_sec: 0, checks: checks }
+    let fks: Vec<BoilaFk> = vec_new()
+    return BoilaTable { id: 0, name: "", cols: cols, pk_idx: 0 - 1, ixs: ixs, ttl_sec: 0, checks: checks, fks: fks }
 }
 
 fn boila_cat_pk_name(name: str) -> bytes {
@@ -143,7 +146,9 @@ fn boila_cat_schema_row(t: BoilaTable) -> Vec<BoilaVal> {
         i = i + 1
     }
     // P21-4 checks tail (absent on pre-P21 rows).
-    return boila_checks_enc_tail(sch, t.checks)
+    let sch2 = boila_checks_enc_tail(sch, t.checks)
+    // P21-3 fks tail.
+    return boila_fks_enc_tail(sch2, t.fks)
 }
 
 // P20-2: thin auto-commit wrapper (kept for the catalog unit test;
@@ -193,7 +198,7 @@ fn boila_cat_create_txn(s: BoilaStore, txn: BoilaTxn, cr: BoilaCreate) -> BoilaC
         }
     }
     let ixs0: Vec<BoilaIxMeta> = vec_new()
-    let t0 = BoilaTable { id: next, name: cr.table, cols: cr.cols, pk_idx: cr.pk_idx, ixs: ixs0, ttl_sec: cr.ttl_sec, checks: cr.checks }
+    let t0 = BoilaTable { id: next, name: cr.table, cols: cr.cols, pk_idx: cr.pk_idx, ixs: ixs0, ttl_sec: cr.ttl_sec, checks: cr.checks, fks: cr.fks }
     let r1 = boila_txn_put(s, txn, boila_cf_sys(), 1, boila_cat_pk_schema(next), boila_row_enc(boila_cat_schema_row(t0)))
     if r1.ok == 0 {
         return BoilaCatTxnRes { s: s, txn: r1.txn, ok: 0, err: r1.err, state: r1.state, table: boila_cat_empty_table(), id: 0 }
@@ -248,6 +253,7 @@ fn boila_cat_decode_schema(s: BoilaStore, name: str, id: i64, sch_row: bytes) ->
     }
     let ixs: Vec<BoilaIxMeta> = vec_new()
     let mut checks: Vec<Vec<BoilaTokP>> = vec_new()
+    let mut fks: Vec<BoilaFk> = vec_new()
     if i < vec_len(sch) {
         let nix = vec_get(sch, i).i
         i = i + 1
@@ -302,11 +308,14 @@ fn boila_cat_decode_schema(s: BoilaStore, name: str, id: i64, sch_row: bytes) ->
         // P21-4 checks tail (absent on pre-P21 rows).
         let ct2 = boila_checks_dec_tail(sch, i)
         checks = ct2.checks
+        // P21-3 fks tail.
+        let fkt = boila_fks_dec_tail(sch, ct2.pos)
+        fks = fkt.fks
     }
     let tg = boila_ttl_get(s, id)?
     s = tg.s
     // buffer may override ttl
-    return BoilaCatRes { s: s, ok: 1, err: "", state: "", table: BoilaTable { id: id, name: name, cols: cols, pk_idx: e1.i, ixs: ixs, ttl_sec: tg.ttl_sec, checks: checks }, id: id }
+    return BoilaCatRes { s: s, ok: 1, err: "", state: "", table: BoilaTable { id: id, name: name, cols: cols, pk_idx: e1.i, ixs: ixs, ttl_sec: tg.ttl_sec, checks: checks, fks: fks }, id: id }
 }
 
 fn boila_cat_by_name(s: BoilaStore, name: str) -> BoilaCatRes !IO !Time !Par {

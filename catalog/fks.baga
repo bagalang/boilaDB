@@ -1,0 +1,48 @@
+// fks.baga — foreign-key encode/decode for the schema-row tail (P21-3).
+
+import "../core/value.baga"
+import "ddl_types.baga"
+import "std/str/str.baga"
+import "std/bytes/bytes.baga"
+
+struct BoilaFksTail {
+    fks: Vec<BoilaFk>,
+    pos: i64
+}
+
+// Append the fks tail: [nfks, per fk: (col_idx, parent_table,
+// parent_col, on_delete)].
+fn boila_fks_enc_tail(sch: Vec<BoilaVal>, fks: Vec<BoilaFk>) -> Vec<BoilaVal> {
+    vec_push(sch, boila_val_i64(vec_len(fks)))
+    let mut i: i64 = 0
+    while i < vec_len(fks) {
+        let fk = vec_get(fks, i)
+        vec_push(sch, boila_val_i64(fk.col_idx))
+        vec_push(sch, boila_val_str(fk.parent_table))
+        vec_push(sch, boila_val_str(fk.parent_col))
+        vec_push(sch, boila_val_i64(fk.on_delete))
+        i = i + 1
+    }
+    return sch
+}
+
+// Decode the tail when present (i points just past the checks tail).
+fn boila_fks_dec_tail(sch: Vec<BoilaVal>, i0: i64) -> BoilaFksTail {
+    let fks: Vec<BoilaFk> = vec_new()
+    let mut i = i0
+    if i < vec_len(sch) {
+        let nfk = vec_get(sch, i).i
+        i = i + 1
+        let mut k: i64 = 0
+        while k < nfk && i + 3 < vec_len(sch) {
+            let cix = vec_get(sch, i).i
+            let pt = vec_get(sch, i + 1)
+            let pc = vec_get(sch, i + 2)
+            let od = vec_get(sch, i + 3).i
+            vec_push(fks, BoilaFk { col_idx: cix, parent_table: str_of_bytes(pt.b), parent_col: str_of_bytes(pc.b), on_delete: od })
+            i = i + 4
+            k = k + 1
+        }
+    }
+    return BoilaFksTail { fks: fks, pos: i }
+}

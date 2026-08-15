@@ -24,6 +24,7 @@ import "exec_dml.baga"
 import "exec_dml_where.baga"
 import "exec_xw.baga"
 import "exec_check.baga"
+import "exec_fk.baga"
 import "std/str/str.baga"
 import "std/bytes/bytes.baga"
 
@@ -146,6 +147,13 @@ fn boila_exec_update(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, upd: BoilaUpd)
             if ckr.ok == 0 {
                 return boila_dml_fail(s, txn, 7, ckr.err, ckr.state)
             }
+            // P21-3: FK проверка върху новия ред
+            let fke = boila_fk_enforce_row(s, txn, t, new)?
+            if fke.ok == 0 {
+                return boila_dml_fail(s, txn, 7, fke.err, fke.state)
+            }
+            s = fke.s
+            txn = fke.txn
             // P20-1: UNIQUE проверка върху новия ред
             let uc = boila_ix_uniq_check_txn(s, txn, t, new, pkenc)
             if uc.ok == 0 {
@@ -260,6 +268,23 @@ fn boila_exec_delete(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, del: BoilaDel)
             return boila_dml_fail(s, txn, 8, xg.err, xg.state)
         }
         tg.pks = xg.pks
+    }
+    // P21-3: FK ON DELETE actions over the rows about to be deleted
+    let del_rows: Vec<Vec<BoilaVal>> = vec_new()
+    let mut di: i64 = 0
+    while di < vec_len(tg.pks) {
+        let g0 = boila_txn_get(s, txn, t.id, vec_get(tg.pks, di))?
+        s = g0.s
+        if g0.found == 1 {
+            vec_push(del_rows, boila_row_dec(g0.row))
+        }
+        di = di + 1
+    }
+    let fkh = boila_fk_handle_parent_delete(s, txn, t, del_rows)?
+    s = fkh.s
+    txn = fkh.txn
+    if fkh.ok == 0 {
+        return boila_dml_fail(s, txn, 8, fkh.err, fkh.state)
     }
     let ftsl = fts_list_for_table(s, t.id)?
     s = ftsl.s

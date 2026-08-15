@@ -1,0 +1,58 @@
+// parse_check.baga — P21-4 CHECK clause parser (split from parse_ddl
+// for the ≤400-line gate).
+
+import "token.baga"
+import "lexer.baga"
+import "../catalog/ddl_types.baga"
+import "std/str/str.baga"
+
+fn boila_pck_tok(l: BoilaLex, i: i64) -> Token {
+    if i < vec_len(l.toks) {
+        return vec_get(l.toks, i)
+    }
+    return token_new(tok_eof(), "")
+}
+
+// CHECK '(' expr ')' — token i is CHECK; returns the expression
+// token span (catalog-level pairs) and the position after ')'.
+struct BoilaPcCheck {
+    ok: i64,
+    toks: Vec<BoilaTokP>,
+    pos: i64,
+    err: str,
+    state: str
+}
+
+fn boila_pc_check_clause(l: BoilaLex, i: i64) -> BoilaPcCheck {
+    let zt: Vec<BoilaTokP> = vec_new()
+    if boila_pck_tok(l, i + 1).kind != tok_lparen() {
+        return BoilaPcCheck { ok: 0, toks: zt, pos: i, err: "очаквах '(' след CHECK", state: "42601" }
+    }
+    let toks: Vec<BoilaTokP> = vec_new()
+    let mut j = i + 2
+    let mut depth: i64 = 1
+    let mut go = true
+    while go {
+        let tj = boila_pck_tok(l, j)
+        if tj.kind == tok_eof() {
+            return BoilaPcCheck { ok: 0, toks: zt, pos: j, err: "незатворен CHECK израз", state: "42601" }
+        }
+        if tj.kind == tok_lparen() {
+            depth = depth + 1
+        }
+        if tj.kind == tok_rparen() {
+            depth = depth - 1
+            if depth == 0 {
+                go = false
+            }
+        }
+        if go {
+            vec_push(toks, BoilaTokP { kind: tj.kind, txt: tj.txt })
+            j = j + 1
+        }
+    }
+    if vec_len(toks) == 0 {
+        return BoilaPcCheck { ok: 0, toks: zt, pos: j, err: "празен CHECK израз", state: "42601" }
+    }
+    return BoilaPcCheck { ok: 1, toks: toks, pos: j + 1, err: "", state: "" }
+}

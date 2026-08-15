@@ -38,8 +38,17 @@ underneath; the column must be the `PRIMARY KEY`).
 and column-level `col TYPE CHECK (expr)`. Enforced on INSERT / upsert /
 UPDATE; TRUE or NULL passes, FALSE → `23514`. Single-table expressions.
 
-**Not yet:** `REFERENCES`, arrays, usable `FLOAT8` columns,
-`NUMERIC(p,s)` enforcement, unquoted `12.50` literals.
+**P21-3 REFERENCES:** column-level `col TYPE REFERENCES parent (pcol)`
+and table-level `FOREIGN KEY (col) REFERENCES parent (pcol)`, with
+`ON DELETE {NO ACTION|RESTRICT|CASCADE|SET NULL}` (default NO ACTION).
+Child INSERT / upsert / UPDATE require the referenced parent row to
+exist (a NULL FK is allowed), else `23503`. Parent DELETE applies each
+referencing child FK: RESTRICT rejects with `23503`, CASCADE deletes
+the child rows, SET NULL nulls the child FK column. Cascade is
+single-level (no recursion through chained FKs).
+
+**Not yet:** arrays, usable `FLOAT8` columns, `NUMERIC(p,s)`
+enforcement, unquoted `12.50` literals, `ON UPDATE` FK actions.
 
 Every `CREATE TABLE` requires a `PRIMARY KEY`.
 

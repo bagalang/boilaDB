@@ -27,7 +27,15 @@ T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
   TRUE/NULL pass, FALSE → `23514`. Gate: `tests/boila_check_test` 15/15
   incl. restart. Residual: single-table expressions only; per-row
   re-eval (no caching); no `NOT VALID`.
-- **P21-3 — REFERENCES / foreign keys (pending).**
+- **R1 — (FIXED P21-3) REFERENCES / foreign keys.** Column- + table-
+  level `REFERENCES parent (pcol)` with `ON DELETE {NO ACTION|
+  RESTRICT|CASCADE|SET NULL}`; FK metadata in a schema-row tail
+  (`catalog/fks.baga`). Child INSERT/upsert/UPDATE → parent must exist
+  (NULL FK allowed) else `23503`; parent DELETE applies the child FK
+  action (RESTRICT `23503` / CASCADE delete / SET NULL). Gate:
+  `tests/boila_fk_test` 16/16 incl. restart. Residual: single-level
+  cascade; child-row fts/hnsw/graph sync skipped on cascade; no
+  `ON UPDATE`; full-table scans (no index seek); self-FK untested.
 
 ## P20 — app-ready (opened 2026-08-15)
 

@@ -23,6 +23,7 @@ import "exec_insert_write.baga"
 import "exec_proj.baga"
 import "exec_xw.baga"
 import "exec_check.baga"
+import "exec_fk.baga"
 import "std/str/str.baga"
 import "std/bytes/bytes.baga"
 import "std/time/time.baga"
@@ -194,6 +195,13 @@ fn boila_insert_one(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ins: BoilaIns, 
     if ckr.ok == 0 {
         return boila_insert_one_fail(s, txn, ckr.err, ckr.state)
     }
+    // P21-3: FK (parent row must exist)
+    let fke = boila_fk_enforce_row(s, txn, t, full)?
+    if fke.ok == 0 {
+        return boila_insert_one_fail(s, txn, fke.err, fke.state)
+    }
+    s = fke.s
+    txn = fke.txn
     if pkval.tag == boila_v_null() {
         return boila_insert_one_fail(s, txn, "NULL в PRIMARY KEY", "23502")
     }

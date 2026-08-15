@@ -68,7 +68,7 @@ fn boila_ix_drop_sec(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ix_name: str) 
         if m.id != ix_id { vec_push(newixs, m) }
         i = i + 1
     }
-    let t2 = BoilaTable { id: t.id, name: t.name, cols: t.cols, pk_idx: t.pk_idx, ixs: newixs, ttl_sec: t.ttl_sec, checks: t.checks }
+    let t2 = BoilaTable { id: t.id, name: t.name, cols: t.cols, pk_idx: t.pk_idx, ixs: newixs, ttl_sec: t.ttl_sec, checks: t.checks, fks: t.fks }
     let r3 = boila_txn_put(s, txn, boila_cf_sys(), 1, boila_cat_pk_schema(t.id), boila_row_enc(boila_cat_schema_row(t2)))
     if r3.ok == 0 { return BoilaIxTxnRes { s: s, txn: r3.txn, ok: 0, err: r3.err, state: r3.state, id: 0 } }
     txn = r3.txn

@@ -13,6 +13,8 @@ import "../core/value.baga"
 import "../vector/distance.baga"
 import "../catalog/ddl_types.baga"
 import "parse_colcon.baga"
+import "parse_check.baga"
+import "parse_fk.baga"
 import "std/str/str.baga"
 
 struct BoilaParseCreate {
@@ -32,50 +34,6 @@ fn boila_pc_tok(l: BoilaLex, i: i64) -> Token {
         return vec_get(l.toks, i)
     }
     return token_new(tok_eof(), "")
-}
-
-// P21-4: CHECK '(' expr ')' — token i is CHECK; returns the expression
-// token span (catalog-level pairs) and the position after ')'.
-struct BoilaPcCheck {
-    ok: i64,
-    toks: Vec<BoilaTokP>,
-    pos: i64,
-    err: str,
-    state: str
-}
-
-fn boila_pc_check_clause(l: BoilaLex, i: i64) -> BoilaPcCheck {
-    let zt: Vec<BoilaTokP> = vec_new()
-    if boila_pc_tok(l, i + 1).kind != tok_lparen() {
-        return BoilaPcCheck { ok: 0, toks: zt, pos: i, err: "очаквах '(' след CHECK", state: "42601" }
-    }
-    let toks: Vec<BoilaTokP> = vec_new()
-    let mut j = i + 2
-    let mut depth: i64 = 1
-    let mut go = true
-    while go {
-        let tj = boila_pc_tok(l, j)
-        if tj.kind == tok_eof() {
-            return BoilaPcCheck { ok: 0, toks: zt, pos: j, err: "незатворен CHECK израз", state: "42601" }
-        }
-        if tj.kind == tok_lparen() {
-            depth = depth + 1
-        }
-        if tj.kind == tok_rparen() {
-            depth = depth - 1
-            if depth == 0 {
-                go = false
-            }
-        }
-        if go {
-            vec_push(toks, BoilaTokP { kind: tj.kind, txt: tj.txt })
-            j = j + 1
-        }
-    }
-    if vec_len(toks) == 0 {
-        return BoilaPcCheck { ok: 0, toks: zt, pos: j, err: "празен CHECK израз", state: "42601" }
-    }
-    return BoilaPcCheck { ok: 1, toks: toks, pos: j + 1, err: "", state: "" }
 }
 
 // typ → value tag / VECTOR pack; -1 ако не е в подмножеството.
@@ -167,8 +125,53 @@ fn boila_parse_create(l: BoilaLex) -> BoilaParseCreate {
                 depth_ok = false
             }
         } else {
-            // coldef := ident typ | CHECK (expr) table-level constraint (P21-4)
+            // coldef := ident typ | CHECK (expr) | FOREIGN KEY (...) (P21-3/4)
             let cn = boila_pc_tok(l, i)
+            if tok_kw(cn, "foreign") == 1 {
+                // FOREIGN KEY (col) REFERENCES parent (pcol) [ON DELETE …]
+                if tok_kw(boila_pc_tok(l, i + 1), "key") != 1 {
+                    return boila_pc_fail("очаквах KEY след FOREIGN", "42601")
+                }
+                if boila_pc_tok(l, i + 2).kind != tok_lparen() {
+                    return boila_pc_fail("очаквах '(' след FOREIGN KEY", "42601")
+                }
+                let fkc = boila_pc_tok(l, i + 3)
+                if fkc.kind != tok_ident() {
+                    return boila_pc_fail("очаквах колона в FOREIGN KEY (...)", "42601")
+                }
+                if boila_pc_tok(l, i + 4).kind != tok_rparen() {
+                    return boila_pc_fail("очаквах ')' след FOREIGN KEY (колона", "42601")
+                }
+                if tok_kw(boila_pc_tok(l, i + 5), "references") != 1 {
+                    return boila_pc_fail("очаквах REFERENCES след FOREIGN KEY (...)", "42601")
+                }
+                let fkr = boila_pc_fk_clause(l, i + 5)
+                if fkr.ok == 0 {
+                    return boila_pc_fail(fkr.err, fkr.state)
+                }
+                let mut cidx: i64 = 0 - 1
+                let mut fi: i64 = 0
+                while fi < vec_len(cr.cols) {
+                    if vec_get(cr.cols, fi).name == fkc.txt {
+                        cidx = fi
+                    }
+                    fi = fi + 1
+                }
+                if cidx < 0 {
+                    return boila_pc_fail(concat("FOREIGN KEY колоната '", concat(fkc.txt, "' не е дефинирана")), "42601")
+                }
+                vec_push(cr.fks, BoilaFk { col_idx: cidx, parent_table: fkr.parent_table, parent_col: fkr.parent_col, on_delete: fkr.on_delete })
+                i = fkr.pos
+                let nx = boila_pc_tok(l, i)
+                if nx.kind == tok_comma() {
+                    i = i + 1
+                } else {
+                    if nx.kind != tok_rparen() {
+                        return boila_pc_fail(concat("очаквах ')' или ',' след FOREIGN KEY, получих '", concat(nx.txt, "'")), "42601")
+                    }
+                    depth_ok = false
+                }
+            } else {
             if tok_kw(cn, "check") == 1 {
                 let ckr = boila_pc_check_clause(l, i)
                 if ckr.ok == 0 {
@@ -260,6 +263,15 @@ fn boila_parse_create(l: BoilaLex) -> BoilaParseCreate {
                     vec_push(cr.checks, ckr2.toks)
                     i = ckr2.pos
                 }
+                // P21-3: column-level REFERENCES
+                if tok_kw(boila_pc_tok(l, i), "references") == 1 {
+                    let fkr = boila_pc_fk_clause(l, i)
+                    if fkr.ok == 0 {
+                        return boila_pc_fail(fkr.err, fkr.state)
+                    }
+                    vec_push(cr.fks, BoilaFk { col_idx: vec_len(cr.cols), parent_table: fkr.parent_table, parent_col: fkr.parent_col, on_delete: fkr.on_delete })
+                    i = fkr.pos
+                }
                 vec_push(cr.cols, boila_coldef_c(cn.txt, typ, cc.flags, cc.def))
                 let nx = boila_pc_tok(l, i)
                 if nx.kind == tok_comma() {
@@ -270,6 +282,7 @@ fn boila_parse_create(l: BoilaLex) -> BoilaParseCreate {
                     }
                     depth_ok = false
                 }
+            }
             }
             }
         }

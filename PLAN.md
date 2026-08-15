@@ -487,8 +487,27 @@ gaps. All sub-phases are application-agnostic.
   level, NULL-passes, multi-check, INSERT/UPDATE, restart). Residual:
   CHECK cannot reference other tables; no `NOT VALID` / `NO INHERIT`;
   per-row re-eval (no caching).
-- **P21-3 — REFERENCES / foreign keys.** Column/table-level FK with
-  ON DELETE actions.
+- **P21-3 — REFERENCES / foreign keys (LANDED).** Column-level
+  `col TYPE REFERENCES parent (pcol)` and table-level
+  `FOREIGN KEY (col) REFERENCES parent (pcol)`, with
+  `ON DELETE {NO ACTION|RESTRICT|CASCADE|SET NULL}` (default NO
+  ACTION). FK metadata lives in a schema-row tail (`BoilaFk`
+  col_idx/parent_table/parent_col/on_delete, catalog/fks.baga enc/dec).
+  Child side: INSERT / upsert / UPDATE verify the referenced parent row
+  exists (NULL FK allowed), else `23503`. Parent side: DELETE applies
+  each referencing child FK's action — RESTRICT rejects with `23503`,
+  CASCADE deletes the child rows, SET NULL nulls the child FK column.
+  Files: `catalog/ddl_types.baga` (`BoilaFk`), `catalog/fks.baga`
+  (new), `catalog/schema.baga`, `sql/parse_fk.baga` (new),
+  `sql/parse_ddl.baga`, `sql/exec_fk.baga` (new), wired into
+  `sql/exec_insert.baga`, `sql/exec_insert_write.baga`,
+  `sql/exec_modify.baga`.
+  **Gate (passed):** `tests/boila_fk_test` — 16 checks (parent-exists,
+  NULL FK, UPDATE, RESTRICT, CASCADE, SET NULL, restart). Residual:
+  single-level cascade (no recursion through chained FKs); child-row
+  modal sync (fts/hnsw/graph) skipped on cascade; `ON UPDATE` actions
+  not supported; parent/child scans are full-table (no index seek);
+  self-referencing FKs untested.
 
 ## Рискове
 - **`go/chan` само `i64`** → комуникация с shard нишките през канали +

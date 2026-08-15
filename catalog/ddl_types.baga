@@ -25,12 +25,22 @@ struct BoilaTokP {
     txt: str
 }
 
+// P21-3: foreign key. on_delete: 0 = NO ACTION/RESTRICT, 1 = CASCADE,
+// 2 = SET NULL.
+struct BoilaFk {
+    col_idx: i64,
+    parent_table: str,
+    parent_col: str,
+    on_delete: i64
+}
+
 struct BoilaCreate {
     table: str,
     cols: Vec<BoilaColDef>,
     pk_idx: i64,
     ttl_sec: i64,           // P9: 0 = none; FROM WITH (ttl_days|ttl_sec)
-    checks: Vec<Vec<BoilaTokP>>  // P21-4: CHECK expressions (token spans)
+    checks: Vec<Vec<BoilaTokP>>,  // P21-4: CHECK expressions (token spans)
+    fks: Vec<BoilaFk>             // P21-3: foreign keys
 }
 
 // kind: 1=add col, 2=rename table, 3=rename column, 4=drop col
@@ -53,7 +63,8 @@ fn boila_coldef_c(name: str, typ: i64, flags: i64, def: BoilaVal) -> BoilaColDef
 fn boila_create_empty() -> BoilaCreate {
     let cols: Vec<BoilaColDef> = vec_new()
     let checks: Vec<Vec<BoilaTokP>> = vec_new()
-    return BoilaCreate { table: "", cols: cols, pk_idx: 0 - 1, ttl_sec: 0, checks: checks }
+    let fks: Vec<BoilaFk> = vec_new()
+    return BoilaCreate { table: "", cols: cols, pk_idx: 0 - 1, ttl_sec: 0, checks: checks, fks: fks }
 }
 
 fn boila_alter_empty() -> BoilaAlter {

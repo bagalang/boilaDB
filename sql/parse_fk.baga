@@ -1,0 +1,77 @@
+// parse_fk.baga — P21-3 REFERENCES clause parser (split from parse_ddl
+// for the ≤400-line gate).
+
+import "token.baga"
+import "lexer.baga"
+import "../catalog/ddl_types.baga"
+import "std/str/str.baga"
+
+fn boila_pfk_tok(l: BoilaLex, i: i64) -> Token {
+    if i < vec_len(l.toks) {
+        return vec_get(l.toks, i)
+    }
+    return token_new(tok_eof(), "")
+}
+
+// REFERENCES parent (col) [ON DELETE {NO ACTION|RESTRICT|CASCADE|SET NULL}].
+// Token i is REFERENCES. on_delete: 0 restrict/no-action, 1 cascade, 2 set null.
+struct BoilaPcFk {
+    ok: i64,
+    parent_table: str,
+    parent_col: str,
+    on_delete: i64,
+    pos: i64,
+    err: str,
+    state: str
+}
+
+fn boila_pc_fk_fail(msg: str, state: str, pos: i64) -> BoilaPcFk {
+    return BoilaPcFk { ok: 0, parent_table: "", parent_col: "", on_delete: 0, pos: pos, err: msg, state: state }
+}
+
+fn boila_pc_fk_clause(l: BoilaLex, i: i64) -> BoilaPcFk {
+    let pt = boila_pfk_tok(l, i + 1)
+    if pt.kind != tok_ident() {
+        return boila_pc_fk_fail("очаквах родителска таблица след REFERENCES", "42601", i + 1)
+    }
+    if boila_pfk_tok(l, i + 2).kind != tok_lparen() {
+        return boila_pc_fk_fail("очаквах '(' след REFERENCES таблица", "42601", i + 2)
+    }
+    let pc = boila_pfk_tok(l, i + 3)
+    if pc.kind != tok_ident() {
+        return boila_pc_fk_fail("очаквах колона в REFERENCES(...)", "42601", i + 3)
+    }
+    if boila_pfk_tok(l, i + 4).kind != tok_rparen() {
+        return boila_pc_fk_fail("очаквах ')' след REFERENCES таблица (колона", "42601", i + 4)
+    }
+    let mut pos = i + 5
+    let mut od: i64 = 0
+    if tok_kw(boila_pfk_tok(l, pos), "on") == 1 {
+        if tok_kw(boila_pfk_tok(l, pos + 1), "delete") != 1 {
+            return boila_pc_fk_fail("очаквах DELETE след ON", "42601", pos + 1)
+        }
+        let a1 = boila_pfk_tok(l, pos + 2)
+        if tok_kw(a1, "cascade") == 1 {
+            od = 1
+            pos = pos + 3
+        } else {
+            if tok_kw(a1, "restrict") == 1 {
+                od = 0
+                pos = pos + 3
+            } else {
+                if tok_kw(a1, "no") == 1 && tok_kw(boila_pfk_tok(l, pos + 3), "action") == 1 {
+                    od = 0
+                    pos = pos + 4
+                } else {
+                    if tok_kw(a1, "set") == 1 && tok_kw(boila_pfk_tok(l, pos + 3), "null") == 1 {
+                        od = 2
+                        pos = pos + 4
+                    } else {
+                        return boila_pc_fk_fail("непознато ON DELETE действие (NO ACTION|RESTRICT|CASCADE|SET NULL)", "0A000", pos + 2)
+                    }
+                }
+            }
+        }
+    }
+    return BoilaPcFk { ok: 1, parent_table: pt.txt, parent_col: pc.txt, on_delete: od, pos: pos, err: "", state: "" }
+}

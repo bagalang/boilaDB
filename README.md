@@ -5,6 +5,11 @@ over sharded [rocksbaga](../rocksbaga/README.md) (LSM). The language is
 **BoilaSQL**, a documented PostgreSQL subset. The wire is **PostgreSQL
 v3** (real `psql` / libpq) plus an HTTP admin/SQL surface.
 
+This repository is the product. The compiler, `std`, `rocksbaga`,
+`httpdbaga`, and `metbaga` stay in the baga language monorepo. Check
+this tree out as `app-product/boilaDB` there (git submodule) so path
+deps and `-I app-product` keep working.
+
 | | |
 |--|--|
 | **Version** | 0.1.0 |
@@ -66,6 +71,20 @@ Numbers: `bench/boila/results/`. Architecture and phase gates:
 
 Dialect reference: [docs/sql.md](docs/sql.md). Modalities:
 [docs/modalities.md](docs/modalities.md).
+
+## Checkout
+
+Inside a baga language clone:
+
+```bash
+git submodule update --init app-product/boilaDB
+# or, first time from a fresh baga tree without the submodule recorded:
+git clone git@github.com:bagalang/boilaDB.git app-product/boilaDB
+```
+
+`sandak.toml` keeps path deps (`../../std`, `../rocksbaga`, …) so the
+shared packages stay in baga. Tests (`tests/boila_*_test.baga`) and
+benches (`bench/boila/`) also stay in baga.
 
 ## Quick start
 

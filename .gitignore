@@ -1,0 +1,6 @@
+.sandak/
+target/
+sandak.lock
+*.o
+.env
+**/.env

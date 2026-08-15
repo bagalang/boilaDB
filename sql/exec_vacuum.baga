@@ -1,0 +1,14 @@
+// exec_vacuum.baga — VACUUM: flush + full compact so the data-CF
+// mvcc filter drops versions with lsn < min_active_snapshot (P16).
+
+import "exec_out.baga"
+import "exec_scan.baga"
+import "plan_cache.baga"
+import "../storage/shards.baga"
+import "../txn/mvcc.baga"
+import "../txn/gc_filter.baga"
+
+fn boila_exec_vacuum(s: BoilaStore, txn: BoilaTxn, pc: BoilaPlanCache) -> BoilaSqlOut !IO !Time !Par {
+    s = boila_compact_full(s)?
+    return boila_sql_ok(s, txn, pc, 22, boila_result_empty(), 0)
+}

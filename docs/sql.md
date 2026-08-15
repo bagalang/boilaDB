@@ -196,6 +196,7 @@ No `DISTINCT` inside aggregates.
 BEGIN [READ ONLY];
 COMMIT;          -- alias: END
 ROLLBACK;        -- alias: ABORT
+VACUUM;          -- flush + full compact; MVCC GC (P16)
 ```
 
 Isolation is a **per-session write buffer**: storage is unchanged until

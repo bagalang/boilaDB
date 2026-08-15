@@ -36,6 +36,10 @@ fn boila_exec_sql_dml(s: BoilaStore, txn: BoilaTxn, db: str, pc: BoilaPlanCache,
         txn = ex.txn
         if ex.ok == 0 {
             // грешка → rollback на буфера (T1): и за явна, и за имплицитна
+            if was_active == 0 {
+                let rb = boila_txn_rollback_s(s, txn)?
+                return boila_sql_fail(rb.s, rb.txn, pc, ex.err, ex.state)
+            }
             txn = boila_txn_rollback(txn)
             return boila_sql_fail(s, txn, pc, ex.err, ex.state)
         }
@@ -69,6 +73,10 @@ fn boila_exec_sql_dml(s: BoilaStore, txn: BoilaTxn, db: str, pc: BoilaPlanCache,
         s = ex.s
         txn = ex.txn
         if ex.ok == 0 {
+            if was_active == 0 {
+                let rb = boila_txn_rollback_s(s, txn)?
+                return boila_sql_fail(rb.s, rb.txn, pc, ex.err, ex.state)
+            }
             txn = boila_txn_rollback(txn)
             return boila_sql_fail(s, txn, pc, ex.err, ex.state)
         }
@@ -102,6 +110,10 @@ fn boila_exec_sql_dml(s: BoilaStore, txn: BoilaTxn, db: str, pc: BoilaPlanCache,
         s = ex.s
         txn = ex.txn
         if ex.ok == 0 {
+            if was_active == 0 {
+                let rb = boila_txn_rollback_s(s, txn)?
+                return boila_sql_fail(rb.s, rb.txn, pc, ex.err, ex.state)
+            }
             txn = boila_txn_rollback(txn)
             return boila_sql_fail(s, txn, pc, ex.err, ex.state)
         }

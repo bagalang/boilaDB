@@ -1,0 +1,62 @@
+// shards_keys.baga — table pk listing via full live_map (not prefix fold).
+// Versioned data keys share a short cf|table prefix; SST prefix-seek can
+// miss them while a longer pk prefix still finds them. Full fold + filter
+// is the honest table scan (P16).
+
+import "shards.baga"
+import "../core/codec.baga"
+import "rocksbaga/db/engine.baga"
+import "rocksbaga/db/engine_keys.baga"
+import "std/bytes/bytes.baga"
+
+struct BoilaTablePks {
+    s: BoilaStore,
+    pks: Vec<bytes>
+}
+
+fn boila_pks_push_unique(pks: Vec<bytes>, pk: bytes) {
+    let mut i: i64 = 0
+    while i < vec_len(pks) {
+        if bytes_eq_b(vec_get(pks, i), pk) {
+            return
+        }
+        i = i + 1
+    }
+    vec_push(pks, pk)
+}
+
+fn boila_table_pks(s: BoilaStore, cf: i64, table_id: i64) -> BoilaTablePks !IO !Time !Par {
+    let pref = boila_key_prefix(cf, table_id)
+    let pks: Vec<bytes> = vec_new()
+    let mut i: i64 = 0
+    while i < s.n {
+        if s.dbs_h == 0 {
+            let r = lsm_live_map_kb(vec_get(s.c.shards, i))?
+            vec_set(s.c.shards, i, r.db)
+            let mut j: i64 = 0
+            while j < vec_len(r.keys) {
+                let k = vec_get(r.keys, j)
+                if boila_key_has_prefix(k, pref) == 1 {
+                    boila_pks_push_unique(pks, boila_pk_from_key(k))
+                }
+                j = j + 1
+            }
+        } else {
+            let mu = boila_shard_lock(s, i)?
+            let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
+            let r = lsm_live_map_kb(map_get(dbs, i))?
+            map_set(dbs, i, r.db)
+            mutex_unlock(mu)
+            let mut j: i64 = 0
+            while j < vec_len(r.keys) {
+                let k = vec_get(r.keys, j)
+                if boila_key_has_prefix(k, pref) == 1 {
+                    boila_pks_push_unique(pks, boila_pk_from_key(k))
+                }
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    return BoilaTablePks { s: s, pks: pks }
+}

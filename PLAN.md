@@ -300,17 +300,23 @@
 
 ## P16 — Compaction filter за MVCC GC
 
-Sweeper-ът (gaps S2) остава fallback. Правилният път е filter в
-rocksbaga при compaction — иначе всеки UPDATE пише + sweeper чете.
+Sweeper-ът (gaps S2) остава fallback за TTL. Правилният път за MVCC
+GC е filter в rocksbaga при compaction — иначе всеки UPDATE пише +
+sweeper чете.
 
-- rocksbaga: per-CF compaction filter hook (drop/keep/undecided на
-  ключ+value). boilaDB регистрира filter на data/index CF:
-  drop версии с `lsn < min_active_snapshot`.
-- boilaDB: `txn/gc_filter.baga` + min-snapshot tracker (най-старият
-  отворен BEGIN). Sweeper се включва само ако filter-ът липсва.
-- **Гейт:** 10k UPDATE на един pk → след compact броят версии ≤
-  (1 + #open snapshots); restart + compact не връща мъртви LSN.
-- Residual: filter-ът не реже sys CF; TTL си остава rocksbaga BAGATTL1.
+- rocksbaga: `LsmDB.filter_kind/cutoff/cf` + `compact_filter.baga`.
+  kind=1 групира ключове с 8-байтов `~lsn` суфикс (стойността е
+  `[lsn 8][row]`, след TTL unpack). Държи newest + newest с
+  `lsn ≤ cutoff`. `lsm_compact_full` merge-ва всички SST.
+- boilaDB: data CF ключове `[cf][table][pk][~lsn]`; GET/DEL по user
+  key; `txn/gc_filter.baga` — BEGIN пише cutoff = snapshot LSN,
+  COMMIT/ROLLBACK го нулира. `VACUUM` = flush + compact_full.
+- **Гейт (минат):** `tests/boila_gc_test` + `tests/lsm_filter_test` —
+  10k версии на един pk → след compact 1; cutoff държи newest+snap;
+  restart + compact не връща мъртви LSN; SQL UPDATE + VACUUM + SELECT.
+- Residual: filter-ът не реже sys CF; index CF остава overwrite (без
+  суфикс); TTL си остава rocksbaga BAGATTL1; pre-P16 data ключове без
+  суфикс се четат като legacy до следващ UPDATE.
 
 ## P17 — Serializable
 
@@ -361,8 +367,8 @@ snapshots / membership). Репликацията на boilaDB е **WAL/LSN batc
   cell2 пакети (доказан модел: rocksbaga MT `lsm_mt_*`, queuebaga).
 - **Struct по стойност** → всеки shard се притежава от една нишка;
   worker-ите никога не мутират storage директно.
-- **MVCC GC** — P16 сменя sweeper с compaction filter; дотогава
-  residual S2 важи. P16 пипа rocksbaga — отделен гейт там.
+- **MVCC GC** — P16 смени sweeper-а с compaction filter; TTL sweeper
+  остава fallback. Residual: index CF не е versioned.
 - **raftbaga е фрагмент** — P19 не обещава multi-DC Postgres-класа
   репликация; обещава commit-log apply върху 3 in-process възела.
 - **SQL подмножество** — изкушението "още една SQL функция" е scope creep;

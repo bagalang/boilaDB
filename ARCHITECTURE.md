@@ -121,9 +121,8 @@ rocksbaga при същия хардуер (моделът на scorecard-ите
   `server/exec_server.baga` — `boila_server_exec*` входна точка.
   Каталозите са per-database; cross-database достъп няма в v1.
   rocksbaga не се променя — per-dir клъстерите съществуват от R32.
-- Sharding: hash на целия кодиран ключ (djb2-подобен, моделът на
-  rocksbaga) по N shard-а; pk е доминиращо-вариращата част, така че
-  разпределението е ефективно по pk. Всеки shard е собствена rocksbaga
+- Sharding: hash на user key-а `[cf][table][pk]` (без `~lsn` суфикса)
+  по N shard-а, за да стоят всички версии на един pk заедно. Всеки shard е собствена rocksbaga
   инстанция (свой WAL, memtable, compaction, page cache) — моделът,
   който rocksbaga доказа с `LSM_SHARDS`/parallel workers. N се фиксира
   при init в `sys` (по подразбиране = ядрата; максимум 64).
@@ -131,8 +130,8 @@ rocksbaga при същия хардуер (моделът на scorecard-ите
   се притежава от точно една нишка** (struct по стойност → собственост).
 - `space.baga`/`space_scan.baga` — namespace-нати put/get/scan/del;
   единственото място, което познава физическия layout.
-- `gc.baga` — MVCC version sweep (вж. §6); P16 сменя първичния път с
-  rocksbaga compaction filter (sweeper остава fallback, gaps S2).
+- `txn/gc_filter.baga` — P16: rocksbaga per-CF compaction filter
+  (data CF, versioned `[pk][~lsn]`); sweeper остава TTL fallback.
 - Backup/monitoring: `lsm_checkpoint`, `lsm_backup_*`, `lsm_dbsize`
   per shard.
 

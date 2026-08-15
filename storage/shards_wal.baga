@@ -1,0 +1,68 @@
+// shards_wal.baga — statement group-commit (K5b). Split from shards.baga
+// so the store file stays under the 400-line gate.
+
+import "shards.baga"
+import "rocksbaga/db/engine.baga"
+import "rocksbaga/db/engine_wal.baga"
+import "rocksbaga/db/shard_ttl.baga"
+
+extern fn fdatasync(fd: i64) -> i64 !IO
+
+fn boila_stmt_begin(s: BoilaStore) -> BoilaStore !Par {
+    if s.dbs_h == 0 {
+        let mut c = lsm_cluster_apply_sync(s.c, 1000000000)
+        let mut i: i64 = 0
+        while i < c.n {
+            let mut db = vec_get(c.shards, i)
+            db = lsm_wal_group_begin(db)
+            vec_set(c.shards, i, db)
+            i = i + 1
+        }
+        return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: c.n, ok: s.ok }
+    }
+    boila_all_lock(s)?
+    let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
+    let mut i: i64 = 0
+    while i < s.n {
+        let mut db = map_get(dbs, i)
+        db.sync_every = 1000000000
+        db = lsm_wal_group_begin(db)
+        map_set(dbs, i, db)
+        i = i + 1
+    }
+    boila_all_unlock(s)?
+    return s
+}
+
+fn boila_stmt_commit(s: BoilaStore) -> BoilaStore !IO !Par {
+    if s.dbs_h == 0 {
+        let mut c = s.c
+        let mut i: i64 = 0
+        while i < c.n {
+            let mut db = vec_get(c.shards, i)
+            db = lsm_wal_group_end(db)?
+            if db.wal_fd >= 0 {
+                fdatasync(db.wal_fd)?
+            }
+            vec_set(c.shards, i, db)
+            i = i + 1
+        }
+        c = lsm_cluster_apply_sync(c, 1)
+        return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: c.n, ok: s.ok }
+    }
+    boila_all_lock(s)?
+    let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
+    let mut i: i64 = 0
+    while i < s.n {
+        let mut db = map_get(dbs, i)
+        db = lsm_wal_group_end(db)?
+        if db.wal_fd >= 0 {
+            fdatasync(db.wal_fd)?
+        }
+        db.sync_every = 1
+        map_set(dbs, i, db)
+        i = i + 1
+    }
+    boila_all_unlock(s)?
+    return s
+}

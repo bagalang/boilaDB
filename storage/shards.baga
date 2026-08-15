@@ -18,10 +18,9 @@ import "rocksbaga/db/engine_scan.baga"
 import "rocksbaga/util/codec.baga"
 import "../core/codec.baga"
 import "../core/value.baga"
+import "shards_kv.baga"
 import "std/bytes/bytes.baga"
 import "std/os/os.baga"
-
-extern fn fdatasync(fd: i64) -> i64 !IO
 
 struct BoilaStore {
     c: LsmCluster,
@@ -68,6 +67,7 @@ fn boila_apply_level_policy(c: LsmCluster) -> LsmCluster !IO {
 fn boila_open(dir: str, nshards: i64, flush_at: i64, compact_at: i64) -> BoilaStore !IO !Par {
     let mut c = lsm_cluster_open(dir, nshards, flush_at, compact_at)?
     c = boila_apply_level_policy(c)?
+    c = lsm_cluster_apply_filter(c, 1, 0, boila_cf_data())
     return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: c.n, ok: c.ok }
 }
 
@@ -75,6 +75,7 @@ fn boila_open(dir: str, nshards: i64, flush_at: i64, compact_at: i64) -> BoilaSt
 fn boila_open_mt(dir: str, nshards: i64, flush_at: i64, compact_at: i64) -> BoilaStore !IO !Par {
     let mut c = lsm_cluster_open(dir, nshards, flush_at, compact_at)?
     c = boila_apply_level_policy(c)?
+    c = lsm_cluster_apply_filter(c, 1, 0, boila_cf_data())
     let dbs: Map<i64, LsmDB> = map_new()
     let mus: Map<i64, i64> = map_new()
     let mut i: i64 = 0
@@ -137,12 +138,15 @@ fn boila_all_unlock(s: BoilaStore) -> i64 !Par {
 }
 
 fn boila_put(s: BoilaStore, cf: i64, table_id: i64, pk: bytes, val: bytes) -> BoilaStore !IO !Time !Par {
-    let key = boila_key_row(cf, table_id, pk)
+    let base = boila_key_row(cf, table_id, pk)
+    let key = boila_store_key(cf, table_id, pk, val)
+    let ix = lsm_shard_ix_b(s.n, base)
     if s.dbs_h == 0 {
-        let c = lsm_cluster_put_kb(s.c, key, val)?
-        return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: c.n, ok: c.ok }
+        let mut db = vec_get(s.c.shards, ix)
+        db = lsm_put_kb(db, key, val)?
+        vec_set(s.c.shards, ix, db)
+        return BoilaStore { c: s.c, dbs_h: 0, mus_h: 0, n: s.c.n, ok: db.ok }
     }
-    let ix = lsm_shard_ix_b(s.n, key)
     let mu = boila_shard_lock(s, ix)?
     let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
     let mut db = map_get(dbs, ix)
@@ -159,12 +163,15 @@ fn boila_put_ex(s: BoilaStore, cf: i64, table_id: i64, pk: bytes, val: bytes, tt
     if ttl_sec <= 0 {
         return boila_put(s, cf, table_id, pk, val)?
     }
-    let key = boila_key_row(cf, table_id, pk)
+    let base = boila_key_row(cf, table_id, pk)
+    let key = boila_store_key(cf, table_id, pk, val)
+    let ix = lsm_shard_ix_b(s.n, base)
     if s.dbs_h == 0 {
-        let c = lsm_cluster_put_ex_kb(s.c, key, val, ttl_sec)?
-        return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: c.n, ok: c.ok }
+        let mut db = vec_get(s.c.shards, ix)
+        db = lsm_put_ex_kb(db, key, val, ttl_sec)?
+        vec_set(s.c.shards, ix, db)
+        return BoilaStore { c: s.c, dbs_h: 0, mus_h: 0, n: s.c.n, ok: db.ok }
     }
-    let ix = lsm_shard_ix_b(s.n, key)
     let mu = boila_shard_lock(s, ix)?
     let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
     let mut db = map_get(dbs, ix)
@@ -176,37 +183,62 @@ fn boila_put_ex(s: BoilaStore, cf: i64, table_id: i64, pk: bytes, val: bytes, tt
 }
 
 fn boila_get(s: BoilaStore, cf: i64, table_id: i64, pk: bytes) -> BoilaGet !IO !Time !Par {
-    let key = boila_key_row(cf, table_id, pk)
+    let base = boila_key_row(cf, table_id, pk)
+    let ix = lsm_shard_ix_b(s.n, base)
     if s.dbs_h == 0 {
-        let g = lsm_cluster_get_kb(s.c, key)?
+        let g = boila_kv_get(vec_get(s.c.shards, ix), cf, base)?
+        vec_set(s.c.shards, ix, g.db)
         return BoilaGet {
-            s: BoilaStore { c: g.c, dbs_h: 0, mus_h: 0, n: g.c.n, ok: g.c.ok },
+            s: BoilaStore { c: s.c, dbs_h: 0, mus_h: 0, n: s.c.n, ok: g.db.ok },
             found: g.found, val: g.val
         }
     }
-    let ix = lsm_shard_ix_b(s.n, key)
     let mu = boila_shard_lock(s, ix)?
     let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
-    let g = lsm_get_kb(map_get(dbs, ix), key)?
+    let g = boila_kv_get(map_get(dbs, ix), cf, base)?
     map_set(dbs, ix, g.db)
     mutex_unlock(mu)
     return BoilaGet { s: s, found: g.found, val: g.val }
 }
 
 fn boila_del(s: BoilaStore, cf: i64, table_id: i64, pk: bytes) -> BoilaStore !IO !Time !Par {
-    let key = boila_key_row(cf, table_id, pk)
-    if s.dbs_h == 0 {
-        let c = lsm_cluster_del_kb(s.c, key)?
-        return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: c.n, ok: c.ok }
+    let base = boila_key_row(cf, table_id, pk)
+    if boila_cf_versioned(cf) == 0 {
+        let ix = lsm_shard_ix_b(s.n, base)
+        if s.dbs_h == 0 {
+            let mut db = lsm_del_kb(vec_get(s.c.shards, ix), base)?
+            vec_set(s.c.shards, ix, db)
+            return BoilaStore { c: s.c, dbs_h: 0, mus_h: 0, n: s.c.n, ok: db.ok }
+        }
+        let mu = boila_shard_lock(s, ix)?
+        let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
+        let mut db = map_get(dbs, ix)
+        db = lsm_del_kb(db, base)?
+        map_set(dbs, ix, db)
+        let ok = db.ok
+        mutex_unlock(mu)
+        return BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, ok: ok }
     }
-    let ix = lsm_shard_ix_b(s.n, key)
-    let mu = boila_shard_lock(s, ix)?
-    let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
-    let mut db = map_get(dbs, ix)
-    db = lsm_del_kb(db, key)?
-    map_set(dbs, ix, db)
-    let ok = db.ok
-    mutex_unlock(mu)
+    // Versioned data: sweep every shard. Routing is by user key, but a
+    // leftover version hashed on the suffixed key must still be dropped.
+    let mut ok: i64 = 1
+    let mut i: i64 = 0
+    while i < s.n {
+        if s.dbs_h == 0 {
+            let mut db = boila_kv_del(vec_get(s.c.shards, i), cf, base)?
+            vec_set(s.c.shards, i, db)
+            ok = db.ok
+        } else {
+            let mu = boila_shard_lock(s, i)?
+            let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
+            let mut db = map_get(dbs, i)
+            db = boila_kv_del(db, cf, base)?
+            map_set(dbs, i, db)
+            ok = db.ok
+            mutex_unlock(mu)
+        }
+        i = i + 1
+    }
     return BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, ok: ok }
 }
 
@@ -270,6 +302,30 @@ fn boila_scan(s: BoilaStore, cf: i64, table_id: i64, cursor: i64, count: i64) ->
     return boila_scan_pref(s, boila_key_prefix(cf, table_id), cursor, count)?
 }
 
+fn boila_scan_invalidate(s: BoilaStore) -> BoilaStore !Par {
+    s.c.scan_epoch = 0 - 1
+    let mut i: i64 = 0
+    while i < s.c.n {
+        let mut db = vec_get(s.c.shards, i)
+        db.scan_epoch = 0 - 1
+        vec_set(s.c.shards, i, db)
+        i = i + 1
+    }
+    if s.dbs_h != 0 {
+        boila_all_lock(s)?
+        let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
+        i = 0
+        while i < s.n {
+            let mut db = map_get(dbs, i)
+            db.scan_epoch = 0 - 1
+            map_set(dbs, i, db)
+            i = i + 1
+        }
+        boila_all_unlock(s)?
+    }
+    return s
+}
+
 // One-shot prefix collect (avoids multi-shard O(N²) re-fold per page).
 // Used by secondary range seek (K3h) and bulk index walks.
 struct BoilaScanAll {
@@ -330,63 +386,4 @@ fn boila_flush(s: BoilaStore) -> BoilaStore !IO !Time !Par {
     }
     boila_all_unlock(s)?
     return BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, ok: ok }
-}
-
-fn boila_stmt_begin(s: BoilaStore) -> BoilaStore !Par {
-    if s.dbs_h == 0 {
-        let mut c = lsm_cluster_apply_sync(s.c, 1000000000)
-        let mut i: i64 = 0
-        while i < c.n {
-            let mut db = vec_get(c.shards, i)
-            db = lsm_wal_group_begin(db)
-            vec_set(c.shards, i, db)
-            i = i + 1
-        }
-        return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: c.n, ok: s.ok }
-    }
-    boila_all_lock(s)?
-    let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
-    let mut i: i64 = 0
-    while i < s.n {
-        let mut db = map_get(dbs, i)
-        db.sync_every = 1000000000
-        db = lsm_wal_group_begin(db)
-        map_set(dbs, i, db)
-        i = i + 1
-    }
-    boila_all_unlock(s)?
-    return s
-}
-
-fn boila_stmt_commit(s: BoilaStore) -> BoilaStore !IO !Par {
-    if s.dbs_h == 0 {
-        let mut c = s.c
-        let mut i: i64 = 0
-        while i < c.n {
-            let mut db = vec_get(c.shards, i)
-            db = lsm_wal_group_end(db)?
-            if db.wal_fd >= 0 {
-                fdatasync(db.wal_fd)?
-            }
-            vec_set(c.shards, i, db)
-            i = i + 1
-        }
-        c = lsm_cluster_apply_sync(c, 1)
-        return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: c.n, ok: s.ok }
-    }
-    boila_all_lock(s)?
-    let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
-    let mut i: i64 = 0
-    while i < s.n {
-        let mut db = map_get(dbs, i)
-        db = lsm_wal_group_end(db)?
-        if db.wal_fd >= 0 {
-            fdatasync(db.wal_fd)?
-        }
-        db.sync_every = 1
-        map_set(dbs, i, db)
-        i = i + 1
-    }
-    boila_all_unlock(s)?
-    return s
 }

@@ -13,6 +13,7 @@
 // Персистентен е (същият WAL като данните) — рестарт не губи схеми.
 
 import "../storage/shards.baga"
+import "../storage/shards_keys.baga"
 import "../core/codec.baga"
 import "../core/value.baga"
 import "../core/row.baga"
@@ -323,26 +324,8 @@ struct BoilaKeysRaw {
 }
 
 fn boila_cf_keys_raw(s: BoilaStore, cf: i64, table_id: i64) -> BoilaKeysRaw !IO !Time !Par {
-    let mut pks: Vec<bytes> = vec_new()
-    let mut cursor: i64 = 0
-    let mut rounds: i64 = 0
-    let mut done = false
-    while done == false && rounds < 20000 {
-        let sc = boila_scan(s, cf, table_id, cursor, 256)?
-        let mut j: i64 = 0
-        while j < vec_len(sc.keys) {
-            let k = vec_get(sc.keys, j)
-            vec_push(pks, bytes_slice(k, 5, bytes_len(k)))
-            j = j + 1
-        }
-        cursor = sc.next
-        rounds = rounds + 1
-        s = sc.s
-        if cursor == 0 {
-            done = true
-        }
-    }
-    return BoilaKeysRaw { s: s, pks: pks }
+    let tk = boila_table_pks(s, cf, table_id)?
+    return BoilaKeysRaw { s: tk.s, pks: tk.pks }
 }
 
 fn boila_txn_keys_raw(s: BoilaStore, table_id: i64) -> BoilaKeysRaw !IO !Time !Par {

@@ -1,0 +1,99 @@
+// gc_filter.baga — min-snapshot tracker + VACUUM (P16).
+// Register rocksbaga mvcc_gc filter on the data CF. BEGIN pins cutoff
+// to the snapshot LSN; COMMIT/ROLLBACK clear it (T2: 0 or 1 open snap).
+// Sweeper (BOILA_SWEEP_MS) stays the TTL fallback.
+
+import "../storage/shards.baga"
+import "../core/codec.baga"
+import "rocksbaga/db/engine.baga"
+import "rocksbaga/db/engine_scan.baga"
+import "rocksbaga/db/shard.baga"
+import "rocksbaga/db/shard_ttl.baga"
+
+fn boila_gc_set(s: BoilaStore, cutoff: i64) -> BoilaStore !Par {
+    if s.dbs_h == 0 {
+        let c = lsm_cluster_set_cutoff(s.c, cutoff)
+        return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: c.n, ok: c.ok }
+    }
+    boila_all_lock(s)?
+    let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
+    let mut i: i64 = 0
+    while i < s.n {
+        let mut db = map_get(dbs, i)
+        db.filter_cutoff = cutoff
+        map_set(dbs, i, db)
+        i = i + 1
+    }
+    boila_all_unlock(s)?
+    return s
+}
+
+fn boila_gc_on_begin(s: BoilaStore, snap: i64) -> BoilaStore !Par {
+    return boila_gc_set(s, snap)?
+}
+
+fn boila_gc_on_end(s: BoilaStore) -> BoilaStore !Par {
+    return boila_gc_set(s, 0)?
+}
+
+fn boila_compact_full(s: BoilaStore) -> BoilaStore !IO !Time !Par {
+    if s.dbs_h == 0 {
+        let c = lsm_cluster_compact_full(s.c)?
+        return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: c.n, ok: c.ok }
+    }
+    boila_all_lock(s)?
+    let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
+    let mut ok: i64 = 1
+    let mut i: i64 = 0
+    while i < s.n {
+        let mut db = map_get(dbs, i)
+        db = lsm_compact_full(db)?
+        map_set(dbs, i, db)
+        ok = db.ok
+        i = i + 1
+    }
+    boila_all_unlock(s)?
+    return BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, ok: ok }
+}
+
+struct BoilaVerCount {
+    s: BoilaStore,
+    n: i64
+}
+
+fn boila_count_versions(s: BoilaStore, table_id: i64, pk: bytes) -> BoilaVerCount !IO !Time !Par {
+    let base = boila_key_row(boila_cf_data(), table_id, pk)
+    let ix = lsm_shard_ix_b(s.n, base)
+    let bl = bytes_len(base)
+    let mut n: i64 = 0
+    if s.dbs_h == 0 {
+        let r = lsm_scan_prefix_all_kb(vec_get(s.c.shards, ix), base)?
+        vec_set(s.c.shards, ix, r.db)
+        let mut i: i64 = 0
+        while i < vec_len(r.keys) {
+            let kn = bytes_len(vec_get(r.keys, i))
+            if kn == bl || kn == bl + 8 {
+                n = n + 1
+            }
+            i = i + 1
+        }
+        return BoilaVerCount {
+            s: BoilaStore { c: s.c, dbs_h: 0, mus_h: 0, n: s.c.n, ok: r.db.ok },
+            n: n
+        }
+    }
+    let mu = boila_shard_lock(s, ix)?
+    let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
+    let r = lsm_scan_prefix_all_kb(map_get(dbs, ix), base)?
+    map_set(dbs, ix, r.db)
+    mutex_unlock(mu)
+    let mut i: i64 = 0
+    while i < vec_len(r.keys) {
+        let kn = bytes_len(vec_get(r.keys, i))
+        if kn == bl || kn == bl + 8 {
+            n = n + 1
+        }
+        i = i + 1
+    }
+    return BoilaVerCount { s: s, n: n }
+}

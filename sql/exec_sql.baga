@@ -64,6 +64,7 @@ import "../txn/mvcc.baga"
 import "exec_drop.baga"
 import "exec_show.baga"
 import "exec_copy.baga"
+import "exec_vacuum.baga"
 import "std/str/str.baga"
 
 // pc_mu=0 → unlocked (tests / single-thread). Serve passes per-db mutex.
@@ -106,8 +107,11 @@ fn boila_exec_sql_mu(s: BoilaStore, txn: BoilaTxn, db: str, sql: str, pc: BoilaP
             }
             return BoilaSqlOut { s: c.s, txn: c.txn, pc: pc, ok: 1, err: "", state: "", kind: 11, res: boila_result_empty(), id: c.lsn }
         }
-        let t2 = boila_txn_rollback(txn)
-        return BoilaSqlOut { s: s, txn: t2, pc: pc, ok: 1, err: "", state: "", kind: 12, res: boila_result_empty(), id: 0 }
+        let rb = boila_txn_rollback_s(s, txn)?
+        return BoilaSqlOut { s: rb.s, txn: rb.txn, pc: pc, ok: 1, err: "", state: "", kind: 12, res: boila_result_empty(), id: 0 }
+    }
+    if tok_kw(t0, "vacuum") == 1 {
+        return boila_exec_vacuum(s, txn, pc)?
     }
 
     if tok_kw(t0, "explain") == 1 {

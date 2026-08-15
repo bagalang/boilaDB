@@ -1,0 +1,68 @@
+// shards_kv.baga — versioned data-CF get/del (P16).
+// Route by the unversioned user key; data values [lsn 8][row] live under
+// [cf][table][pk][~lsn 8]. Sys/index/other CFs stay exact-key.
+
+import "rocksbaga/db/engine.baga"
+import "rocksbaga/db/engine_scan.baga"
+import "../core/codec.baga"
+import "std/bytes/bytes.baga"
+
+fn boila_kv_get(db: LsmDB, cf: i64, base: bytes) -> LsmGet !IO !Time {
+    if boila_cf_versioned(cf) == 0 {
+        return lsm_get_kb(db, base)?
+    }
+    let sc = lsm_scan_prefix_all_kb(db, base)?
+    db = sc.db
+    let bl = bytes_len(base)
+    let mut best = bytes_new(0)
+    let mut have: i64 = 0
+    let mut i: i64 = 0
+    let n = vec_len(sc.keys)
+    let mut done: i64 = 0
+    while done == 0 && i < n {
+        let k = vec_get(sc.keys, i)
+        let kn = bytes_len(k)
+        if kn == bl + 8 {
+            best = k
+            have = 1
+            done = 1
+        } else {
+            if kn == bl && have == 0 {
+                best = k
+                have = 1
+            }
+            i = i + 1
+        }
+    }
+    if have == 0 {
+        return LsmGet { db: db, found: 0, val: bytes_new(0) }
+    }
+    return lsm_get_kb(db, best)?
+}
+
+fn boila_kv_del(db: LsmDB, cf: i64, base: bytes) -> LsmDB !IO !Time {
+    db = lsm_del_kb(db, base)?
+    if boila_cf_versioned(cf) == 0 {
+        return db
+    }
+    db.scan_epoch = 0 - 1
+    let sc = lsm_scan_prefix_all_kb(db, base)?
+    db = sc.db
+    let bl = bytes_len(base)
+    let owned: Vec<bytes> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(sc.keys) {
+        let k = vec_get(sc.keys, i)
+        let kn = bytes_len(k)
+        if kn == bl || kn == bl + 8 {
+            vec_push(owned, bytes_slice(k, 0, kn))
+        }
+        i = i + 1
+    }
+    i = 0
+    while i < vec_len(owned) {
+        db = lsm_del_kb(db, vec_get(owned, i))?
+        i = i + 1
+    }
+    return db
+}

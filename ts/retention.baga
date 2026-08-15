@@ -113,7 +113,7 @@ fn boila_ts_sweep(s: BoilaStore) -> BoilaStore !IO !Time !Par {
             while j < vec_len(sc.keys) {
                 let k = vec_get(sc.keys, j)
                 if bytes_len(k) > 5 {
-                    let dpk = bytes_slice(k, 5, bytes_len(k))
+                    let dpk = boila_pk_from_key(k)
                     let g = boila_get(s, boila_cf_data(), tid, dpk)?
                     s = g.s
                 }

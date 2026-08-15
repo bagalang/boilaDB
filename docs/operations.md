@@ -25,6 +25,10 @@ GET).
 - Writes go through a per-session txn buffer and commit as one fsync
   batch with a monotonic LSN (`m|next_lsn` in sys).
 - Data/index values are `[lsn 8B BE][row]`.
+- Data CF keys are versioned (`[cf][table][pk][~lsn 8]`). `VACUUM`
+  (and auto-compact) runs the rocksbaga mvcc filter: keep newest +
+  newest with `lsn ≤` the oldest open snapshot. Sys CF is not filtered.
+  TTL still uses rocksbaga `BAGATTL1` + optional `BOILA_SWEEP_MS`.
 - rocksbaga WAL wraps the window as `WAL_OP_BATCH` (op 19) with one
   CRC (up to 16 MiB per statement group). A torn tail replays as
   “drop the whole batch” — row and secondary index stay together.

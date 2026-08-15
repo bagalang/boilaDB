@@ -6,6 +6,9 @@
 // Committed value формат v2: [lsn 8B BE][row enc].
 
 import "../storage/shards.baga"
+import "../storage/shards_wal.baga"
+import "../storage/shards_keys.baga"
+import "gc_filter.baga"
 import "../core/codec.baga"
 import "../core/value.baga"
 import "../core/row.baga"
@@ -189,12 +192,19 @@ fn boila_txn_begin(s: BoilaStore, txn: BoilaTxn, read_only: i64, db: str) -> Boi
     let w: Vec<BoilaTxnWrite> = vec_new()
     let maxw = boila_txn_max_from_env()?
     let t2 = BoilaTxn { active: 1, read_only: read_only, snapshot_lsn: cur.lsn, db: db, writes: w, max_writes: maxw }
-    return boila_txn_res(cur.s, t2, 1, "", "", cur.lsn)
+    let s2 = boila_gc_on_begin(cur.s, cur.lsn)?
+    return boila_txn_res(s2, t2, 1, "", "", cur.lsn)
 }
 
 fn boila_txn_rollback(txn: BoilaTxn) -> BoilaTxn {
     let w: Vec<BoilaTxnWrite> = vec_new()
     return BoilaTxn { active: 0, read_only: 0, snapshot_lsn: 0, db: "", writes: w, max_writes: txn.max_writes }
+}
+
+fn boila_txn_rollback_s(s: BoilaStore, txn: BoilaTxn) -> BoilaTxnRes !Par {
+    let t2 = boila_txn_rollback(txn)
+    let s2 = boila_gc_on_end(s)?
+    return boila_txn_res(s2, t2, 1, "", "", 0)
 }
 
 // COMMIT: LSN alloc + всички buffer записи в един fsync batch.
@@ -204,8 +214,7 @@ fn boila_txn_commit(s: BoilaStore, txn: BoilaTxn) -> BoilaTxnRes !IO !Time !Par 
         return boila_txn_res(s, txn, 1, "", "", 0)
     }
     if vec_len(txn.writes) == 0 {
-        let t2 = boila_txn_rollback(txn)
-        return boila_txn_res(s, t2, 1, "", "", 0)
+        return boila_txn_rollback_s(s, txn)?
     }
     // LSN: прочети брояча, запази lsn, запиши lsn+1
     let g = boila_get(s, boila_cf_sys(), 1, boila_lsn_pk())?
@@ -238,6 +247,7 @@ fn boila_txn_commit(s: BoilaStore, txn: BoilaTxn) -> BoilaTxnRes !IO !Time !Par 
     }
     s = boila_stmt_commit(s)?
     let t2 = boila_txn_rollback(txn)
+    s = boila_gc_on_end(s)?
     return boila_txn_res(s, t2, 1, "", "", lsn)
 }
 
@@ -274,25 +284,9 @@ struct BoilaTxnKeys {
 // pk списък на таблица: storage + buffer put-ове − buffer del-ове.
 // (Линеен merge — buffer-ът е малък; документно ограничение, не hot path.)
 fn boila_txn_keys(s: BoilaStore, txn: BoilaTxn, table_id: i64) -> BoilaTxnKeys !IO !Time !Par {
-    let mut pks: Vec<bytes> = vec_new()
-    let mut cursor: i64 = 0
-    let mut rounds: i64 = 0
-    let mut done = false
-    while done == false && rounds < 20000 {
-        let sc = boila_scan(s, boila_cf_data(), table_id, cursor, 256)?
-        let mut j: i64 = 0
-        while j < vec_len(sc.keys) {
-            let k = vec_get(sc.keys, j)
-            vec_push(pks, bytes_slice(k, 5, bytes_len(k)))
-            j = j + 1
-        }
-        cursor = sc.next
-        rounds = rounds + 1
-        s = sc.s
-        if cursor == 0 {
-            done = true
-        }
-    }
+    let tk = boila_table_pks(s, boila_cf_data(), table_id)?
+    s = tk.s
+    let mut pks = tk.pks
     // buffer merge
     let mut i: i64 = 0
     while i < vec_len(txn.writes) {

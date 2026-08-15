@@ -7,8 +7,8 @@
 //
 // Shard-маршрутизацията е hash на целия ключ през rocksbaga клъстера —
 // pk е доминиращо-вариращата част, така че разпределението е по pk.
-// Версионен суфикс за MVCC (P3) се добавя тук; pk без суфикс остава
-// еднозначен, защото операциите в P0–P2 са само точка/prefix.
+// P16: data CF row ключ е [cf][table][pk][~lsn 8B]. pk без суфикс е
+// user key (GET/DEL маршрутизират по него). Sys/index остават без суфикс.
 
 import "value.baga"
 import "std/bytes/bytes.baga"
@@ -65,4 +65,54 @@ fn boila_key_has_prefix(key: bytes, p: bytes) -> i64 {
         return 1
     }
     return 0
+}
+
+// P16: data CF keys carry an 8-byte ~lsn suffix so compact can GC.
+fn boila_cf_versioned(cf: i64) -> i64 {
+    if cf == boila_cf_data() {
+        return 1
+    }
+    return 0
+}
+
+fn boila_enc_inv_lsn(lsn: i64) -> bytes {
+    let b = bytes_new(8)
+    let mut i: i64 = 0
+    while i < 8 {
+        bytes_set(b, i, ((lsn >> (56 - 8 * i)) & 255) ^ 255)
+        i = i + 1
+    }
+    return b
+}
+
+fn boila_val_lsn(val: bytes) -> i64 {
+    if bytes_len(val) < 8 {
+        return 0
+    }
+    let mut x: i64 = 0
+    let mut i: i64 = 0
+    while i < 8 {
+        x = (x << 8) | (bytes_at(val, i) & 255)
+        i = i + 1
+    }
+    return x
+}
+
+fn boila_store_key(cf: i64, table_id: i64, pk: bytes, val: bytes) -> bytes {
+    let base = boila_key_row(cf, table_id, pk)
+    if boila_cf_versioned(cf) == 1 && bytes_len(val) >= 8 {
+        return bytes_concat(base, boila_enc_inv_lsn(boila_val_lsn(val)))
+    }
+    return base
+}
+
+fn boila_pk_from_key(key: bytes) -> bytes {
+    let n = bytes_len(key)
+    if n < 5 {
+        return bytes_new(0)
+    }
+    if n >= 13 && (bytes_at(key, 0) & 255) == boila_cf_data() {
+        return bytes_slice(key, 5, n - 8)
+    }
+    return bytes_slice(key, 5, n)
 }

@@ -21,7 +21,7 @@ T = транзакции, W = wire protocol, F = FTS.
   Residual: no binary/file/HEADER; COPY FROM MT pool → 0A000.
 - **N4 — (FIXED P15) SCRAM-SHA-256.** s1 verifier; auto SASL; live
   pgbaga. Residual: no PLUS/TLS/MD5.
-- **N5 — filter-GC / SSI / FDW / raft.** PLAN P16–P19.
+- **N5 — (P16 FIXED) filter-GC.** SSI / FDW / raft остават P17–P19.
 
 ## Открити 2026-08-13 (ormbaga live + `--rc` serve_pg)
 
@@ -616,9 +616,11 @@ T = транзакции, W = wire protocol, F = FTS.
   rocksbaga), не само по pk. pk е доминиращо-вариращата част, така че
   разпределението е ефективно по pk — но не е гарантирано перфектно
   равномерно при къси pk-та. Измерва се на P11.
-- **S2 — MVCC GC е sweeper до P16.** Compaction filter в rocksbaga +
-  boilaDB `txn/gc_filter.baga` е P16; дотогава write amplification под
-  тежки UPDATE остава измерен residual, не се крие.
+- **S2 — (FIXED P16) MVCC GC е compaction filter.** rocksbaga
+  `filter_kind=1` на data CF + versioned ключове; `VACUUM` /
+  `lsm_compact_full`. Sweeper (`BOILA_SWEEP_MS`) остава TTL fallback.
+  Residual: index CF не е versioned; sys CF не се реже; pre-P16
+  ключове без суфикс са legacy до UPDATE.
 - **M1 — (FIXED) request counters + build info + /ready.** `boila_mt_stat_*`
   + `/health` version, `/ready` (503 at max_conn), `/metrics`
   `boila_build_info`, PG `server_version` boilaDB 0.1.0.

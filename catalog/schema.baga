@@ -37,9 +37,9 @@ struct BoilaCatTxnRes {
 
 struct BoilaIxMeta {
     id: i64,
-    col_idx: i64,
+    cols: Vec<i64>,   // P21-1: indexed columns (1 = single-column)
     name: str,
-    uniq: i64     // P20-1: 1 = UNIQUE index (23505 on duplicate)
+    uniq: i64         // P20-1: 1 = UNIQUE index (23505 on duplicate)
 }
 
 struct BoilaTable {
@@ -101,7 +101,13 @@ fn boila_cat_schema_row(t: BoilaTable) -> Vec<BoilaVal> {
     while i < vec_len(t.ixs) {
         let m = vec_get(t.ixs, i)
         vec_push(sch, boila_val_i64(m.id))
-        vec_push(sch, boila_val_i64(m.col_idx))
+        // P21-1: main section keeps the first column; the full list of a
+        // multi-column index lives in the ixcols tail.
+        let mut c0: i64 = 0 - 1
+        if vec_len(m.cols) > 0 {
+            c0 = vec_get(m.cols, 0)
+        }
+        vec_push(sch, boila_val_i64(c0))
         i = i + 1
     }
     // P20-1 tail: [nuniq, (uniq ix_id)*] — old rows have no tail.
@@ -148,87 +154,36 @@ fn boila_cat_schema_row(t: BoilaTable) -> Vec<BoilaVal> {
     // P21-4 checks tail (absent on pre-P21 rows).
     let sch2 = boila_checks_enc_tail(sch, t.checks)
     // P21-3 fks tail.
-    return boila_fks_enc_tail(sch2, t.fks)
+    let sch3 = boila_fks_enc_tail(sch2, t.fks)
+    // P21-1 ixcols tail: [n_multi, per multi-col ix: (ix_id, ncols, (col_idx)*)].
+    let mut nm: i64 = 0
+    i = 0
+    while i < vec_len(t.ixs) {
+        if vec_len(vec_get(t.ixs, i).cols) > 1 {
+            nm = nm + 1
+        }
+        i = i + 1
+    }
+    vec_push(sch3, boila_val_i64(nm))
+    i = 0
+    while i < vec_len(t.ixs) {
+        let m = vec_get(t.ixs, i)
+        if vec_len(m.cols) > 1 {
+            vec_push(sch3, boila_val_i64(m.id))
+            vec_push(sch3, boila_val_i64(vec_len(m.cols)))
+            let mut ci: i64 = 0
+            while ci < vec_len(m.cols) {
+                vec_push(sch3, boila_val_i64(vec_get(m.cols, ci)))
+                ci = ci + 1
+            }
+        }
+        i = i + 1
+    }
+    return sch3
 }
 
-// P20-2: thin auto-commit wrapper (kept for the catalog unit test;
-// SQL DDL uses the txn variant directly).
-fn boila_cat_create(s: BoilaStore, cr: BoilaCreate) -> BoilaCatRes !IO !Time !Par {
-    let b = boila_txn_begin(s, boila_txn_new(), 0, "")?
-    let r = boila_cat_create_txn(b.s, b.txn, cr)?
-    if r.ok == 0 {
-        let rb = boila_txn_rollback_s(r.s, r.txn)?
-        return BoilaCatRes { s: rb.s, ok: 0, err: r.err, state: r.state, table: r.table, id: 0 }
-    }
-    let c = boila_txn_commit(r.s, r.txn)?
-    return BoilaCatRes { s: c.s, ok: c.ok, err: c.err, state: c.state, table: r.table, id: r.id }
-}
-
-// T5: CREATE TABLE през txn buffer (rollback-able).
-fn boila_cat_create_txn(s: BoilaStore, txn: BoilaTxn, cr: BoilaCreate) -> BoilaCatTxnRes !IO !Time !Par {
-    let npk = boila_cat_pk_name(cr.table)
-    let bix = boila_txn_find(txn, boila_cf_sys(), 1, npk)
-    if bix >= 0 {
-        let w = vec_get(txn.writes, bix)
-        if w.is_del == 0 {
-            return BoilaCatTxnRes { s: s, txn: txn, ok: 0, err: concat("таблица '", concat(cr.table, "' вече съществува")), state: "42P07", table: boila_cat_empty_table(), id: 0 }
-        }
-    } else {
-        let dn = boila_get(s, boila_cf_sys(), 1, npk)?
-        s = dn.s
-        if dn.found == 1 {
-            return BoilaCatTxnRes { s: s, txn: txn, ok: 0, err: concat("таблица '", concat(cr.table, "' вече съществува")), state: "42P07", table: boila_cat_empty_table(), id: 0 }
-        }
-    }
-    let mut next: i64 = 1
-    let mpk = boila_cat_pk_meta()
-    let mix = boila_txn_find(txn, boila_cf_sys(), 1, mpk)
-    if mix >= 0 {
-        let w = vec_get(txn.writes, mix)
-        if w.is_del == 0 {
-            let mrow = boila_row_dec(w.row)
-            if vec_len(mrow) > 0 { next = vec_get(mrow, 0).i }
-        }
-    } else {
-        let dm = boila_get(s, boila_cf_sys(), 1, mpk)?
-        s = dm.s
-        if dm.found == 1 {
-            let mrow = boila_row_dec(dm.val)
-            if vec_len(mrow) > 0 { next = vec_get(mrow, 0).i }
-        }
-    }
-    let ixs0: Vec<BoilaIxMeta> = vec_new()
-    let t0 = BoilaTable { id: next, name: cr.table, cols: cr.cols, pk_idx: cr.pk_idx, ixs: ixs0, ttl_sec: cr.ttl_sec, checks: cr.checks, fks: cr.fks }
-    let r1 = boila_txn_put(s, txn, boila_cf_sys(), 1, boila_cat_pk_schema(next), boila_row_enc(boila_cat_schema_row(t0)))
-    if r1.ok == 0 {
-        return BoilaCatTxnRes { s: s, txn: r1.txn, ok: 0, err: r1.err, state: r1.state, table: boila_cat_empty_table(), id: 0 }
-    }
-    txn = r1.txn
-    let idrow: Vec<BoilaVal> = vec_new()
-    vec_push(idrow, boila_val_i64(next))
-    let r2 = boila_txn_put(s, txn, boila_cf_sys(), 1, npk, boila_row_enc(idrow))
-    if r2.ok == 0 {
-        return BoilaCatTxnRes { s: s, txn: r2.txn, ok: 0, err: r2.err, state: r2.state, table: boila_cat_empty_table(), id: 0 }
-    }
-    txn = r2.txn
-    let mrow2: Vec<BoilaVal> = vec_new()
-    vec_push(mrow2, boila_val_i64(next + 1))
-    let r3 = boila_txn_put(s, txn, boila_cf_sys(), 1, mpk, boila_row_enc(mrow2))
-    if r3.ok == 0 {
-        return BoilaCatTxnRes { s: s, txn: r3.txn, ok: 0, err: r3.err, state: r3.state, table: boila_cat_empty_table(), id: 0 }
-    }
-    txn = r3.txn
-    if cr.ttl_sec > 0 {
-        let tr: Vec<BoilaVal> = vec_new()
-        vec_push(tr, boila_val_i64(cr.ttl_sec))
-        let r4 = boila_txn_put(s, txn, boila_cf_sys(), 1, boila_ttl_pk(next), boila_row_enc(tr))
-        if r4.ok == 0 {
-            return BoilaCatTxnRes { s: s, txn: r4.txn, ok: 0, err: r4.err, state: r4.state, table: boila_cat_empty_table(), id: 0 }
-        }
-        txn = r4.txn
-    }
-    return BoilaCatTxnRes { s: s, txn: txn, ok: 1, err: "", state: "", table: t0, id: next }
-}
+// CREATE TABLE catalog writes (boila_cat_create / boila_cat_create_txn)
+// moved to catalog/create.baga at P21-1 (≤400-line gate).
 
 fn boila_cat_decode_schema(s: BoilaStore, name: str, id: i64, sch_row: bytes) -> BoilaCatRes !IO !Time !Par {
     let sch = boila_row_dec(sch_row)
@@ -261,7 +216,9 @@ fn boila_cat_decode_schema(s: BoilaStore, name: str, id: i64, sch_row: bytes) ->
         while k < nix && i + 1 < vec_len(sch) {
             let xid = vec_get(sch, i)
             let xcol = vec_get(sch, i + 1)
-            vec_push(ixs, BoilaIxMeta { id: xid.i, col_idx: xcol.i, name: "", uniq: 0 })
+            let xcols: Vec<i64> = vec_new()
+            vec_push(xcols, xcol.i)
+            vec_push(ixs, BoilaIxMeta { id: xid.i, cols: xcols, name: "", uniq: 0 })
             i = i + 2
             k = k + 1
         }
@@ -277,7 +234,7 @@ fn boila_cat_decode_schema(s: BoilaStore, name: str, id: i64, sch_row: bytes) ->
                 while j < vec_len(ixs) {
                     let m = vec_get(ixs, j)
                     if m.id == uid {
-                        vec_set(ixs, j, BoilaIxMeta { id: m.id, col_idx: m.col_idx, name: m.name, uniq: 1 })
+                        vec_set(ixs, j, BoilaIxMeta { id: m.id, cols: m.cols, name: m.name, uniq: 1 })
                     }
                     j = j + 1
                 }
@@ -311,6 +268,34 @@ fn boila_cat_decode_schema(s: BoilaStore, name: str, id: i64, sch_row: bytes) ->
         // P21-3 fks tail.
         let fkt = boila_fks_dec_tail(sch, ct2.pos)
         fks = fkt.fks
+        // P21-1 ixcols tail: full column list of multi-column indexes.
+        let mut i5 = fkt.pos
+        if i5 < vec_len(sch) {
+            let nm = vec_get(sch, i5).i
+            i5 = i5 + 1
+            let mut k5: i64 = 0
+            while k5 < nm && i5 + 1 < vec_len(sch) {
+                let mid = vec_get(sch, i5).i
+                let ncol = vec_get(sch, i5 + 1).i
+                i5 = i5 + 2
+                let mcols: Vec<i64> = vec_new()
+                let mut ci: i64 = 0
+                while ci < ncol && i5 < vec_len(sch) {
+                    vec_push(mcols, vec_get(sch, i5).i)
+                    i5 = i5 + 1
+                    ci = ci + 1
+                }
+                let mut j5: i64 = 0
+                while j5 < vec_len(ixs) {
+                    if vec_get(ixs, j5).id == mid {
+                        let om = vec_get(ixs, j5)
+                        vec_set(ixs, j5, BoilaIxMeta { id: om.id, cols: mcols, name: om.name, uniq: om.uniq })
+                    }
+                    j5 = j5 + 1
+                }
+                k5 = k5 + 1
+            }
+        }
     }
     let tg = boila_ttl_get(s, id)?
     s = tg.s

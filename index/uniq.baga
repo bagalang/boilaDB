@@ -33,17 +33,33 @@ fn boila_uniq_has_prefix(b: bytes, pre: bytes) -> i64 {
 }
 
 fn boila_uniq_fail_msg(t: BoilaTable, m: BoilaIxMeta) -> str {
-    let mut cn = "?"
-    if m.col_idx >= 0 && m.col_idx < vec_len(t.cols) {
-        cn = vec_get(t.cols, m.col_idx).name
+    let mut cn = ""
+    let mut i: i64 = 0
+    while i < vec_len(m.cols) {
+        let cix = vec_get(m.cols, i)
+        let mut nm = "?"
+        if cix >= 0 && cix < vec_len(t.cols) {
+            nm = vec_get(t.cols, cix).name
+        }
+        if i > 0 {
+            cn = concat(cn, ", ")
+        }
+        cn = concat(cn, nm)
+        i = i + 1
     }
     return concat(concat("дублирана стойност в UNIQUE индекс върху '", cn), "'")
 }
 
-// Entry key prefix for (ix_id, value) — same layout as secondary.baga
-// boila_ix_entry_pk without the pk tail.
-fn boila_uniq_pref(ix_id: i64, v: BoilaVal) -> bytes {
-    return bytes_concat(boila_enc_u32_be(ix_id), boila_val_enc(v))
+// Entry key prefix for (ix_id, values) — same layout as secondary.baga
+// boila_ix_entry_pk without the pk tail (P21-1 multi-column).
+fn boila_uniq_pref(ix_id: i64, vals: Vec<BoilaVal>) -> bytes {
+    let mut out = boila_enc_u32_be(ix_id)
+    let mut i: i64 = 0
+    while i < vec_len(vals) {
+        out = bytes_concat(out, boila_val_enc(vec_get(vals, i)))
+        i = i + 1
+    }
+    return out
 }
 
 // Storage candidates: pks whose committed index entry is (ix_id, v).
@@ -52,9 +68,9 @@ struct BoilaUniqCands {
     pks: Vec<bytes>
 }
 
-fn boila_uniq_storage_cands(s: BoilaStore, t: BoilaTable, ix_id: i64, v: BoilaVal) -> BoilaUniqCands !IO !Time !Par {
+fn boila_uniq_storage_cands(s: BoilaStore, t: BoilaTable, ix_id: i64, vals: Vec<BoilaVal>) -> BoilaUniqCands !IO !Time !Par {
     let pks: Vec<bytes> = vec_new()
-    let full_pref = boila_key_row(boila_cf_index(), t.id, boila_uniq_pref(ix_id, v))
+    let full_pref = boila_key_row(boila_cf_index(), t.id, boila_uniq_pref(ix_id, vals))
     let plen = bytes_len(full_pref)
     let sa = boila_scan_pref_all(s, full_pref)?
     s = sa.s
@@ -67,50 +83,80 @@ fn boila_uniq_storage_cands(s: BoilaStore, t: BoilaTable, ix_id: i64, v: BoilaVa
     return BoilaUniqCands { s: s, pks: pks }
 }
 
-// Data row of cand as seen by this txn: found/is_del/val-at-col from
-// the buffer when present, else committed state assumed (the storage
-// index entry proves the committed value).
-fn boila_uniq_cand_holds(txn: BoilaTxn, t: BoilaTable, cand: bytes, col_idx: i64, v: BoilaVal) -> i64 {
-    let dix = boila_txn_find(txn, boila_cf_data(), t.id, cand)
-    if dix < 0 {
-        return 1
+struct BoilaUniqHolds {
+    s: BoilaStore,
+    holds: i64
+}
+
+// P21-1: cand's live row must match ALL indexed values. boila_txn_get
+// merges the txn buffer with versioned storage (unwraps the LSN shell),
+// so deleted/updated candidates are seen correctly. The prefix scan can
+// return var-width false positives, hence the full value verification.
+fn boila_uniq_cand_holds(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, cand: bytes, cols: Vec<i64>, vals: Vec<BoilaVal>) -> BoilaUniqHolds !IO !Time !Par {
+    let g = boila_txn_get(s, txn, t.id, cand)?
+    s = g.s
+    if g.found == 0 {
+        return BoilaUniqHolds { s: s, holds: 0 }
     }
-    let dw = vec_get(txn.writes, dix)
-    if dw.is_del == 1 {
-        return 0
+    let row = boila_row_dec(g.row)
+    let mut k: i64 = 0
+    while k < vec_len(cols) {
+        let cix = vec_get(cols, k)
+        if cix >= vec_len(row) {
+            return BoilaUniqHolds { s: s, holds: 0 }
+        }
+        if boila_val_cmp(vec_get(row, cix), vec_get(vals, k)) != 0 {
+            return BoilaUniqHolds { s: s, holds: 0 }
+        }
+        k = k + 1
     }
-    let row = boila_row_dec(dw.row)
-    if col_idx >= vec_len(row) {
-        return 0
-    }
-    if boila_val_cmp(vec_get(row, col_idx), v) == 0 {
-        return 1
-    }
-    return 0
+    return BoilaUniqHolds { s: s, holds: 1 }
 }
 
 // DML check: row (full decoded values) about to be written under pkenc.
-// 23505 when another live row already holds the value on any UNIQUE ix.
+// 23505 when another live row already holds the same values on any
+// UNIQUE ix. P21-1: multi-column — all indexed values compared; a NULL
+// in any indexed column means the row cannot collide (PG).
 fn boila_ix_uniq_check_txn(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, row: Vec<BoilaVal>, pkenc: bytes) -> BoilaTxnRes !IO !Time !Par {
     let mut i: i64 = 0
     while i < vec_len(t.ixs) {
         let m = vec_get(t.ixs, i)
-        if m.uniq == 1 && m.col_idx < vec_len(row) {
-            let v = vec_get(row, m.col_idx)
-            if v.tag != boila_v_null() {
+        if m.uniq == 1 {
+            let vals: Vec<BoilaVal> = vec_new()
+            let mut okc: i64 = 1
+            let mut anynull: i64 = 0
+            let mut vi: i64 = 0
+            while vi < vec_len(m.cols) {
+                let cix = vec_get(m.cols, vi)
+                if cix >= 0 && cix < vec_len(row) {
+                    let vv = vec_get(row, cix)
+                    vec_push(vals, vv)
+                    if vv.tag == boila_v_null() {
+                        anynull = 1
+                    }
+                } else {
+                    okc = 0
+                }
+                vi = vi + 1
+            }
+            if okc == 1 && anynull == 0 {
                 // committed candidates (prefix scan)
-                let lc = boila_uniq_storage_cands(s, t, m.id, v)?
+                let lc = boila_uniq_storage_cands(s, t, m.id, vals)?
                 s = lc.s
                 let mut j: i64 = 0
                 while j < vec_len(lc.pks) {
                     let cand = vec_get(lc.pks, j)
-                    if bytes_eq_b(cand, pkenc) == 0 && boila_uniq_cand_holds(txn, t, cand, m.col_idx, v) == 1 {
-                        return boila_txn_res(s, txn, 0, boila_uniq_fail_msg(t, m), "23505", 0)
+                    if bytes_eq_b(cand, pkenc) == 0 {
+                        let ch = boila_uniq_cand_holds(s, txn, t, cand, m.cols, vals)?
+                        s = ch.s
+                        if ch.holds == 1 {
+                            return boila_txn_res(s, txn, 0, boila_uniq_fail_msg(t, m), "23505", 0)
+                        }
                     }
                     j = j + 1
                 }
                 // buffered candidates (entries written in this txn)
-                let pref = boila_uniq_pref(m.id, v)
+                let pref = boila_uniq_pref(m.id, vals)
                 let plen = bytes_len(pref)
                 let mut k: i64 = 0
                 while k < vec_len(txn.writes) {
@@ -118,12 +164,9 @@ fn boila_ix_uniq_check_txn(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, row: Vec
                     if w.cf == boila_cf_index() && w.table_id == t.id && w.is_del == 0 && bytes_len(w.pk) > plen && boila_uniq_has_prefix(w.pk, pref) == 1 {
                         let cand = bytes_slice(w.pk, plen, bytes_len(w.pk))
                         if bytes_eq_b(cand, pkenc) == 0 {
-                            let dix = boila_txn_find(txn, boila_cf_data(), t.id, cand)
-                            let mut dead = 0
-                            if dix >= 0 && vec_get(txn.writes, dix).is_del == 1 {
-                                dead = 1
-                            }
-                            if dead == 0 {
+                            let ch = boila_uniq_cand_holds(s, txn, t, cand, m.cols, vals)?
+                            s = ch.s
+                            if ch.holds == 1 {
                                 return boila_txn_res(s, txn, 0, boila_uniq_fail_msg(t, m), "23505", 0)
                             }
                         }
@@ -141,6 +184,20 @@ fn boila_ix_uniq_check_txn(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, row: Vec
 
 fn boila_uniq_entry(v: BoilaVal, pk: bytes) -> bytes {
     let enc = boila_val_enc(v)
+    let mut out = boila_enc_u32_be(bytes_len(enc))
+    out = bytes_concat(out, enc)
+    return bytes_concat(out, pk)
+}
+
+// P21-1: multi-column build-dup entry — enc is the concatenated column
+// encodings; equal tuples group adjacent after the sort.
+fn boila_uniq_entry_m(vals: Vec<BoilaVal>, pk: bytes) -> bytes {
+    let mut enc = bytes_new(0)
+    let mut i: i64 = 0
+    while i < vec_len(vals) {
+        enc = bytes_concat(enc, boila_val_enc(vec_get(vals, i)))
+        i = i + 1
+    }
     let mut out = boila_enc_u32_be(bytes_len(enc))
     out = bytes_concat(out, enc)
     return bytes_concat(out, pk)

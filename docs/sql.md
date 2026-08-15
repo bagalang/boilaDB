@@ -97,7 +97,7 @@ ALTER TABLE t DROP COLUMN col;              -- last non-PK only; CASCADE drops i
 DROP TABLE [IF EXISTS] t;
 TRUNCATE [TABLE] [IF EXISTS] t;             -- wipe data + modality CFs; keep schema
 
-CREATE [UNIQUE] INDEX [IF NOT EXISTS] name ON t (col);
+CREATE [UNIQUE] INDEX [IF NOT EXISTS] name ON t (col [, col…]);
 CREATE INDEX [IF NOT EXISTS] name ON t USING hnsw (emb);
 CREATE FTS INDEX [IF NOT EXISTS] name ON t (body);
 CREATE GRAPH [IF NOT EXISTS] name ON edges (src, dst [, w]);
@@ -110,12 +110,15 @@ DROP GRAPH [IF EXISTS] name ON t;
 `SHOW TABLES` · `SHOW INDEX[ES] FROM t` · `SHOW COLUMNS FROM t` /
 `DESCRIBE t` / `DESC t` · `SHOW CREATE TABLE t`.
 
-**UNIQUE (P20-1):** `CREATE UNIQUE INDEX` rejects a duplicate non-NULL
-value with `23505` on INSERT / UPDATE / `ON CONFLICT DO UPDATE`. NULLs
-are distinct (many NULL rows are allowed, as in PostgreSQL). Creating a
-unique index on a column that already contains duplicates fails with
-`23505` and rolls back. `UNIQUE` is not accepted with `USING hnsw`.
-Single-column only.
+**UNIQUE (P20-1, multi-column P21-1):** `CREATE UNIQUE INDEX` rejects a
+duplicate non-NULL value with `23505` on INSERT / UPDATE / `ON CONFLICT
+DO UPDATE`. Multi-column is supported — `ON t (a, b)` rejects a
+duplicate of the whole tuple; a NULL in any indexed column means the row
+cannot collide (PostgreSQL). NULLs are otherwise distinct (many NULL
+rows allowed). Creating a unique index on data that already contains
+duplicates fails with `23505` and rolls back. `UNIQUE` is not accepted
+with `USING hnsw`. Multi-column indexes enforce uniqueness only (they do
+not serve `WHERE` equality/range).
 
 **Column constraints (P20-2):** `NOT NULL` and `DEFAULT` follow the
 column type in any order. `DEFAULT` accepts a string / integer /

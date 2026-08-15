@@ -1,0 +1,149 @@
+// range.baga — secondary index range scan (split out of secondary.baga
+// at P21-1 for the ≤400-line gate).
+
+import "../storage/shards.baga"
+import "../core/codec.baga"
+import "../core/value.baga"
+import "../catalog/schema.baga"
+import "std/bytes/bytes.baga"
+
+// first i where keys[i] >= target (sorted keys).
+fn boila_ix_key_lb(keys: Vec<bytes>, target: bytes) -> i64 {
+    let mut lo: i64 = 0
+    let mut hi = vec_len(keys)
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2
+        if boila_bytes_cmp(vec_get(keys, mid), target) < 0 {
+            lo = mid + 1
+        } else {
+            hi = mid
+        }
+    }
+    return lo
+}
+
+// Fixed-width val_enc size from tag (str/bytes/json → -1).
+fn boila_ix_val_width(tag: i64) -> i64 {
+    if tag == boila_v_null() { return 1 }
+    if tag == boila_v_bool() { return 2 }
+    if tag == boila_v_i64() { return 9 }
+    if tag == boila_v_ts() { return 9 }
+    return 0 - 1
+}
+
+// K3d/f: secondary index range. Fixed val width, or var val + fixed PK.
+// has=0 → caller seq-filters; has=1 → pks are matches.
+struct BoilaIxRange {
+    s: BoilaStore,
+    ok: i64,
+    err: str,
+    state: str,
+    has: i64,
+    pks: Vec<bytes>
+}
+
+// K3h: one-shot collect + sort + lower_bound + early-stop for fixed-width
+// vals (i64/ts/bool). lo_excl/hi_excl: 1 = strict (> / <); 0 = inclusive.
+fn boila_ix_range(s: BoilaStore, t: BoilaTable, ix_id: i64, has_lo: i64, lo: BoilaVal, has_hi: i64, hi: BoilaVal, lo_excl: i64, hi_excl: i64) -> BoilaIxRange !IO !Time !Par {
+    let pks: Vec<bytes> = vec_new()
+    let mut tag: i64 = 0 - 1
+    if has_lo == 1 { tag = lo.tag }
+    if has_hi == 1 {
+        if tag >= 0 && hi.tag != tag {
+            return BoilaIxRange { s: s, ok: 0, err: "range lo/hi — различен тип", state: "42804", has: 0, pks: pks }
+        }
+        tag = hi.tag
+    }
+    let vw = boila_ix_val_width(tag)
+    let mut pw: i64 = 0 - 1
+    if t.pk_idx >= 0 && t.pk_idx < vec_len(t.cols) {
+        pw = boila_ix_val_width(vec_get(t.cols, t.pk_idx).typ)
+    }
+    if vw < 0 && pw < 0 {
+        return BoilaIxRange { s: s, ok: 1, err: "", state: "", has: 0, pks: pks }
+    }
+    let full_pref = boila_key_row(boila_cf_index(), t.id, boila_enc_u32_be(ix_id))
+    let plen = bytes_len(full_pref)
+    let sa = boila_scan_pref_all(s, full_pref)?
+    s = sa.s
+    let keys = sa.keys
+    // Fixed-width val: keys already sorted by prefix scan rebuild (K3h);
+    // lower_bound + early-stop on sort-order encoding.
+    if vw >= 0 {
+        let mut i: i64 = 0
+        if has_lo == 1 {
+            let lo_enc = boila_val_enc(lo)
+            i = boila_ix_key_lb(keys, bytes_concat(full_pref, lo_enc))
+            if lo_excl == 1 {
+                let mut skip = 1
+                while skip == 1 && i < vec_len(keys) {
+                    let body = bytes_slice(vec_get(keys, i), plen, bytes_len(vec_get(keys, i)))
+                    if bytes_len(body) >= vw && boila_bytes_cmp(bytes_slice(body, 0, vw), lo_enc) == 0 {
+                        i = i + 1
+                    } else {
+                        skip = 0
+                    }
+                }
+            }
+        }
+        let mut hi_enc = bytes_new(0)
+        if has_hi == 1 {
+            hi_enc = boila_val_enc(hi)
+        }
+        let mut go = 1
+        while go == 1 && i < vec_len(keys) {
+            let body = bytes_slice(vec_get(keys, i), plen, bytes_len(vec_get(keys, i)))
+            let bl = bytes_len(body)
+            if bl < vw {
+                i = i + 1
+            } else {
+                let venc = bytes_slice(body, 0, vw)
+                let mut past = 0
+                if has_hi == 1 {
+                    let c = boila_bytes_cmp(venc, hi_enc)
+                    if hi_excl == 1 {
+                        if c >= 0 { past = 1 }
+                    } else {
+                        if c > 0 { past = 1 }
+                    }
+                }
+                if past == 1 {
+                    go = 0
+                } else {
+                    vec_push(pks, bytes_slice(body, vw, bl))
+                    i = i + 1
+                }
+            }
+        }
+        return BoilaIxRange { s: s, ok: 1, err: "", state: "", has: 1, pks: pks }
+    }
+    // var-width val + fixed PK: linear filter (no byte-order seek)
+    let mut j: i64 = 0
+    while j < vec_len(keys) {
+        let body = bytes_slice(vec_get(keys, j), plen, bytes_len(vec_get(keys, j)))
+        let bl = bytes_len(body)
+        if pw >= 0 && bl > pw {
+            let pkv = boila_val_dec(bytes_slice(body, 0, bl - pw))
+            let mut keep = true
+            if has_lo == 1 {
+                let c = boila_val_cmp(pkv, lo)
+                if lo_excl == 1 {
+                    if c != 1 { keep = false }
+                } else {
+                    if c != 0 && c != 1 { keep = false }
+                }
+            }
+            if keep && has_hi == 1 {
+                let c = boila_val_cmp(pkv, hi)
+                if hi_excl == 1 {
+                    if c != 0 - 1 { keep = false }
+                } else {
+                    if c != 0 && c != 0 - 1 { keep = false }
+                }
+            }
+            if keep { vec_push(pks, bytes_slice(body, bl - pw, bl)) }
+        }
+        j = j + 1
+    }
+    return BoilaIxRange { s: s, ok: 1, err: "", state: "", has: 1, pks: pks }
+}

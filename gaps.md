@@ -19,7 +19,16 @@ T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
   peer count. Gate: `tests/boila_winnum_test` + `boila_window_test`.
   Residual: window MIN/MAX over NUMERIC still i64-only; multi-OVER-spec
   per query still 0A000 (P13 residual).
-- **P21-1 — multi-column UNIQUE (pending).**
+- **I1 — (FIXED P21-1) multi-column UNIQUE index.** Entry key encodes
+  all indexed values; full column list in an `ixcols` schema-row tail
+  (backward compatible). Tuple-wide uniqueness; var-width prefix-scan
+  false positives are filtered by re-reading each candidate via
+  `boila_txn_get` (which also fixed a latent committed-row read that
+  used the LSN-wrapped value). NULL in any indexed column → no
+  collision (PG). Gate: `tests/boila_munique_test` 16/16 +
+  `boila_unique_test`/`boila_index_test` + 12-test battery. Residual:
+  multi-column indexes serve uniqueness only (not WHERE eq/range);
+  SHOW INDEX prints the first indexed column; no multi-column FK.
 - **K2 — (FIXED P21-4) CHECK constraints.** Table-level + column-level
   `CHECK (expr)`; token spans stored in the schema-row checks tail
   (`BoilaTokP` kind+txt pairs keep catalog/ free of sql/ imports);

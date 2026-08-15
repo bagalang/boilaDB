@@ -9,6 +9,7 @@ import "parse_with.baga"
 import "exec_scan.baga"
 import "plan_cache.baga"
 import "../catalog/schema.baga"
+import "../catalog/create.baga"
 import "../txn/mvcc.baga"
 import "../storage/shards.baga"
 import "../index/secondary.baga"
@@ -101,7 +102,7 @@ fn boila_exec_sql_ddl(s: BoilaStore, txn: BoilaTxn, db: str, pc: BoilaPlanCache,
                 }
                 return BoilaSqlOut { s: s, txn: txn, pc: boila_pc_invalidate_mu(pc, pc_mu)?, ok: 1, err: "", state: "", kind: 15, res: boila_result_empty(), id: hx.id }
             }
-            let ix = boila_ix_create(s, txn, ct.table, p.ix.ix_name, p.ix.col, p.uniq)?
+            let ix = boila_ix_create(s, txn, ct.table, p.ix.ix_name, p.ix.cols, p.uniq)?
             s = ix.s
             txn = ix.txn
             if ix.ok == 0 {

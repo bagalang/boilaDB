@@ -470,7 +470,26 @@ gaps. All sub-phases are application-agnostic.
   Files: `sql/exec_window.baga`.
   **Gate (passed):** `tests/boila_winnum_test` — partition SUM/AVG
   decimal-exact + i64 no-regression; `tests/boila_window_test` green.
-- **P21-1 — multi-column UNIQUE index.** Extends P20-1 to `(a, b, …)`.
+- **P21-1 — multi-column UNIQUE index (LANDED).** `CREATE UNIQUE INDEX
+  name ON t (a, b, …)`. The index entry key encodes all indexed values
+  (`enc_u32_be(ix_id)||val_enc(v1)||val_enc(v2)||…||pk`); the full
+  column list is stored in an `ixcols` schema-row tail (backward
+  compatible — pre-P21 rows and single-column indexes decode as
+  1-column). Uniqueness enforcement compares the whole tuple; because a
+  prefix scan over var-width values can return false positives, every
+  candidate row is re-checked via `boila_txn_get` (buffer+versioned
+  storage, LSN-unwrapped) — this also fixed a latent committed-row
+  read bug. A NULL in any indexed column means the row cannot collide
+  (PG). `ON DELETE`-style `ON UPDATE` / multi-column non-unique WHERE
+  optimization are out of scope (multi-column indexes serve uniqueness
+  only; `boila_ix_by_col_t` ignores them). Files: `catalog/schema.baga`
+  (+ `catalog/create.baga` split), `index/secondary.baga` (+
+  `index/range.baga` split), `index/uniq.baga`, `sql/parse_index.baga`,
+  `sql/ast.baga`, `sql/exec_sql_ddl.baga`.
+  **Gate (passed):** `tests/boila_munique_test` — 16 checks (distinct
+  tuples, dup tuple, var-width false-positive filtering, NULL, UPDATE,
+  buffer collision, build-time dup, restart); `boila_unique_test` +
+  `boila_index_test` + 12-test regression battery green.
 - **P21-4 — CHECK constraints (LANDED).** Table-level `CHECK (expr)`
   (a list element in CREATE TABLE) and column-level `col TYPE CHECK
   (expr)`. The expression token span is stored in the schema-row checks

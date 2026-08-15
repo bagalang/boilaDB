@@ -109,7 +109,8 @@ struct BoilaParseIx {
 }
 
 fn boila_pix_fail(msg: str, state: str) -> BoilaParseIx {
-    return BoilaParseIx { ok: 0, ix: BoilaIxDef { ix_name: "", table: "", col: "" }, err: msg, state: state }
+    let zc: Vec<str> = vec_new()
+    return BoilaParseIx { ok: 0, ix: BoilaIxDef { ix_name: "", table: "", col: "", cols: zc }, err: msg, state: state }
 }
 
 struct BoilaParseFts {
@@ -121,7 +122,8 @@ struct BoilaParseFts {
 }
 
 fn boila_pfts_fail(msg: str, state: str) -> BoilaParseFts {
-    return BoilaParseFts { ok: 0, ix: BoilaIxDef { ix_name: "", table: "", col: "" }, if_not_exists: 0, err: msg, state: state }
+    let zc: Vec<str> = vec_new()
+    return BoilaParseFts { ok: 0, ix: BoilaIxDef { ix_name: "", table: "", col: "", cols: zc }, if_not_exists: 0, err: msg, state: state }
 }
 
 fn boila_parse_if_not_exists(l: BoilaLex, i: i64) -> i64 {
@@ -167,7 +169,9 @@ fn boila_parse_create_fts(l: BoilaLex) -> BoilaParseFts {
     if boila_pc_tok(l, i).kind != tok_eof() {
         return boila_pfts_fail(concat("неочакван токен '", concat(boila_pc_tok(l, i).txt, "' след CREATE FTS INDEX")), "0A000")
     }
-    return BoilaParseFts { ok: 1, ix: BoilaIxDef { ix_name: nm.txt, table: tb.txt, col: col.txt }, if_not_exists: ifne, err: "", state: "" }
+    let fcols: Vec<str> = vec_new()
+    vec_push(fcols, col.txt)
+    return BoilaParseFts { ok: 1, ix: BoilaIxDef { ix_name: nm.txt, table: tb.txt, col: col.txt, cols: fcols }, if_not_exists: ifne, err: "", state: "" }
 }
 
 struct BoilaParseIx2 {
@@ -182,7 +186,8 @@ struct BoilaParseIx2 {
 }
 
 fn boila_pix2_fail(msg: str, state: str) -> BoilaParseIx2 {
-    return BoilaParseIx2 { ok: 0, ix: BoilaIxDef { ix_name: "", table: "", col: "" }, kind: 0, metric: 0, if_not_exists: 0, uniq: 0, err: msg, state: state }
+    let zc: Vec<str> = vec_new()
+    return BoilaParseIx2 { ok: 0, ix: BoilaIxDef { ix_name: "", table: "", col: "", cols: zc }, kind: 0, metric: 0, if_not_exists: 0, uniq: 0, err: msg, state: state }
 }
 
 fn boila_parse_create_ix(l: BoilaLex) -> BoilaParseIx {
@@ -241,21 +246,40 @@ fn boila_parse_create_ix_from(l: BoilaLex, i0: i64, uniq: i64) -> BoilaParseIx2 
     if boila_pc_tok(l, i).kind != tok_lparen() {
         return boila_pix2_fail("очаквах '(' след таблицата/USING", "42601")
     }
-    let col = boila_pc_tok(l, i + 1)
-    if col.kind != tok_ident() {
+    i = i + 1
+    // P21-1: списък от колони (a, b, …)
+    let cols: Vec<str> = vec_new()
+    let mut more_c = true
+    while more_c {
+        let col = boila_pc_tok(l, i)
+        if col.kind != tok_ident() {
+            return boila_pix2_fail("очаквах колона в CREATE INDEX", "42601")
+        }
+        vec_push(cols, col.txt)
+        i = i + 1
+        if boila_pc_tok(l, i).kind == tok_comma() {
+            i = i + 1
+        } else {
+            if boila_pc_tok(l, i).kind != tok_rparen() {
+                return boila_pix2_fail("очаквах ',' или ')' в CREATE INDEX", "42601")
+            }
+            more_c = false
+        }
+    }
+    i = i + 1
+    if vec_len(cols) == 0 {
         return boila_pix2_fail("очаквах колона в CREATE INDEX", "42601")
     }
-    if boila_pc_tok(l, i + 2).kind != tok_rparen() {
-        return boila_pix2_fail("индекс върху една колона", "0A000")
+    if kind == 1 && vec_len(cols) > 1 {
+        return boila_pix2_fail("HNSW индекс върху една колона", "0A000")
     }
-    i = i + 3
     if boila_pc_tok(l, i).kind == tok_semi() { i = i + 1 }
     if boila_pc_tok(l, i).kind != tok_eof() {
         return boila_pix2_fail(concat("неочакван токен '", concat(boila_pc_tok(l, i).txt, "' след CREATE INDEX")), "0A000")
     }
     return BoilaParseIx2 {
         ok: 1,
-        ix: BoilaIxDef { ix_name: nm.txt, table: tb.txt, col: col.txt },
+        ix: BoilaIxDef { ix_name: nm.txt, table: tb.txt, col: vec_get(cols, 0), cols: cols },
         kind: kind, metric: metric, if_not_exists: ifne, uniq: uniq, err: "", state: ""
     }
 }

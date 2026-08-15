@@ -42,25 +42,37 @@ fn boila_ix_meta_pk() -> bytes {
     return bytes_of_str("m|next_ix")
 }
 
-// Entry ключ за стойност на индексирана колона.
-fn boila_ix_entry_pk(ix_id: i64, val: BoilaVal, pk: bytes) -> bytes {
+// P21-1: конкатенирана encoding на индексните колони (една колона = 1 елемент).
+fn boila_ix_vals_enc(vals: Vec<BoilaVal>) -> bytes {
+    let mut out = bytes_new(0)
+    let mut i: i64 = 0
+    while i < vec_len(vals) {
+        out = bytes_concat(out, boila_val_enc(vec_get(vals, i)))
+        i = i + 1
+    }
+    return out
+}
+
+// Entry ключ за стойностите на индексираните колони.
+fn boila_ix_entry_pk(ix_id: i64, vals: Vec<BoilaVal>, pk: bytes) -> bytes {
     let mut out = boila_enc_u32_be(ix_id)
-    out = bytes_concat(out, boila_val_enc(val))
+    out = bytes_concat(out, boila_ix_vals_enc(vals))
     return bytes_concat(out, pk)
 }
 
-// Префикс за exact lookup по (ix_id, стойност).
-fn boila_ix_lookup_prefix(ix_id: i64, val: BoilaVal) -> bytes {
+// Префикс за exact lookup по (ix_id, стойности).
+fn boila_ix_lookup_prefix(ix_id: i64, vals: Vec<BoilaVal>) -> bytes {
     let mut out = boila_enc_u32_be(ix_id)
-    return bytes_concat(out, boila_val_enc(val))
+    return bytes_concat(out, boila_ix_vals_enc(vals))
 }
 
 // Index id по колона — чисто, без IO (дефинициите са в BoilaTable).
+// P21-1: само едноколонни индекси (мултиколонните не обслужват WHERE eq).
 fn boila_ix_by_col_t(t: BoilaTable, col_idx: i64) -> i64 {
     let mut i: i64 = 0
     while i < vec_len(t.ixs) {
         let m = vec_get(t.ixs, i)
-        if m.col_idx == col_idx {
+        if vec_len(m.cols) == 1 && vec_get(m.cols, 0) == col_idx {
             return m.id
         }
         i = i + 1
@@ -73,19 +85,28 @@ fn boila_ix_by_col_t(t: BoilaTable, col_idx: i64) -> i64 {
 // Build: pk списък през boila_txn_keys (storage + buffer), без писания
 // по време на събирането. P20-1: uniq=1 → UNIQUE; build-ът отказва 23505
 // при съществуващи дубликати (NULL-ите са distinct, PG).
-fn boila_ix_create(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ix_name: str, col_name: str, uniq: i64) -> BoilaIxTxnRes !IO !Time !Par {
-    // колоната съществува ли
-    let mut col_idx: i64 = 0 - 1
-    let mut i: i64 = 0
-    while i < vec_len(t.cols) {
-        let cd = vec_get(t.cols, i)
-        if cd.name == col_name {
-            col_idx = i
+fn boila_ix_create(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ix_name: str, col_names: Vec<str>, uniq: i64) -> BoilaIxTxnRes !IO !Time !Par {
+    // колоните съществуват ли (P21-1: многоколонен индекс)
+    let cols: Vec<i64> = vec_new()
+    let mut ci: i64 = 0
+    while ci < vec_len(col_names) {
+        let cname = vec_get(col_names, ci)
+        let mut cidx: i64 = 0 - 1
+        let mut j: i64 = 0
+        while j < vec_len(t.cols) {
+            if vec_get(t.cols, j).name == cname {
+                cidx = j
+            }
+            j = j + 1
         }
-        i = i + 1
+        if cidx < 0 {
+            return BoilaIxTxnRes { s: s, txn: txn, ok: 0, err: concat("колона '", concat(cname, "' не съществува")), state: "42703", id: 0 }
+        }
+        vec_push(cols, cidx)
+        ci = ci + 1
     }
-    if col_idx < 0 {
-        return BoilaIxTxnRes { s: s, txn: txn, ok: 0, err: concat("колона '", concat(col_name, "' не съществува")), state: "42703", id: 0 }
+    if vec_len(cols) == 0 {
+        return BoilaIxTxnRes { s: s, txn: txn, ok: 0, err: "CREATE INDEX без колона", state: "42601", id: 0 }
     }
     // дубликат по име (point GET)
     let g = boila_get(s, boila_cf_sys(), 1, boila_ix_cat_pk(t.id, ix_name))?
@@ -119,10 +140,10 @@ fn boila_ix_create(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ix_name: str, co
         return BoilaIxTxnRes { s: s, txn: r1.txn, ok: 0, err: r1.err, state: r1.state, id: 0 }
     }
     txn = r1.txn
-    // каталог по име
+    // каталог по име (id + първата колона; DROP INDEX ползва само id)
     let cat: Vec<BoilaVal> = vec_new()
     vec_push(cat, boila_val_i64(next))
-    vec_push(cat, boila_val_i64(col_idx))
+    vec_push(cat, boila_val_i64(vec_get(cols, 0)))
     let r2 = boila_txn_put(s, txn, boila_cf_sys(), 1, boila_ix_cat_pk(t.id, ix_name), boila_row_enc(cat))
     if r2.ok == 0 {
         return BoilaIxTxnRes { s: s, txn: r2.txn, ok: 0, err: r2.err, state: r2.state, id: 0 }
@@ -130,12 +151,12 @@ fn boila_ix_create(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ix_name: str, co
     txn = r2.txn
     // schema rewrite: старите ixs + новият
     let newixs: Vec<BoilaIxMeta> = vec_new()
-    i = 0
+    let mut i: i64 = 0
     while i < vec_len(t.ixs) {
         vec_push(newixs, vec_get(t.ixs, i))
         i = i + 1
     }
-    vec_push(newixs, BoilaIxMeta { id: next, col_idx: col_idx, name: ix_name, uniq: uniq })
+    vec_push(newixs, BoilaIxMeta { id: next, cols: cols, name: ix_name, uniq: uniq })
     let t2 = BoilaTable { id: t.id, name: t.name, cols: t.cols, pk_idx: t.pk_idx, ixs: newixs, ttl_sec: t.ttl_sec, checks: t.checks, fks: t.fks }
     let r3 = boila_txn_put(s, txn, boila_cf_sys(), 1, boila_cat_pk_schema(t.id), boila_row_enc(boila_cat_schema_row(t2)))
     if r3.ok == 0 {
@@ -153,12 +174,33 @@ fn boila_ix_create(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ix_name: str, co
         s = g3.s
         if g3.found == 1 {
             let row = boila_row_dec(g3.row)
-            if col_idx < vec_len(row) {
-                let v = vec_get(row, col_idx)
-                if uniq == 1 && v.tag != boila_v_null() {
-                    vec_push(dup_entries, boila_uniq_entry(v, pkenc))
+            let vals: Vec<BoilaVal> = vec_new()
+            let mut okc: i64 = 1
+            let mut vi: i64 = 0
+            while vi < vec_len(cols) {
+                let cix2 = vec_get(cols, vi)
+                if cix2 < vec_len(row) {
+                    vec_push(vals, vec_get(row, cix2))
+                } else {
+                    okc = 0
                 }
-                let r4 = boila_txn_put(s, txn, boila_cf_index(), t.id, boila_ix_entry_pk(next, v, pkenc), bytes_new(0))
+                vi = vi + 1
+            }
+            if okc == 1 {
+                if uniq == 1 {
+                    let mut allnn: i64 = 1
+                    let mut vi2: i64 = 0
+                    while vi2 < vec_len(vals) {
+                        if vec_get(vals, vi2).tag == boila_v_null() {
+                            allnn = 0
+                        }
+                        vi2 = vi2 + 1
+                    }
+                    if allnn == 1 {
+                        vec_push(dup_entries, boila_uniq_entry_m(vals, pkenc))
+                    }
+                }
+                let r4 = boila_txn_put(s, txn, boila_cf_index(), t.id, boila_ix_entry_pk(next, vals, pkenc), bytes_new(0))
                 if r4.ok == 0 {
                     return BoilaIxTxnRes { s: s, txn: r4.txn, ok: 0, err: r4.err, state: r4.state, id: 0 }
                 }
@@ -179,9 +221,20 @@ fn boila_ix_put_all_txn(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, row: Vec<Bo
     let mut i: i64 = 0
     while i < vec_len(t.ixs) {
         let m = vec_get(t.ixs, i)
-        if m.col_idx < vec_len(row) {
-            let v = vec_get(row, m.col_idx)
-            let r = boila_txn_put(s, txn, boila_cf_index(), t.id, boila_ix_entry_pk(m.id, v, pkenc), bytes_new(0))
+        let vals: Vec<BoilaVal> = vec_new()
+        let mut okc: i64 = 1
+        let mut vi: i64 = 0
+        while vi < vec_len(m.cols) {
+            let cix = vec_get(m.cols, vi)
+            if cix >= 0 && cix < vec_len(row) {
+                vec_push(vals, vec_get(row, cix))
+            } else {
+                okc = 0
+            }
+            vi = vi + 1
+        }
+        if okc == 1 {
+            let r = boila_txn_put(s, txn, boila_cf_index(), t.id, boila_ix_entry_pk(m.id, vals, pkenc), bytes_new(0))
             if r.ok == 0 {
                 return r
             }
@@ -196,9 +249,20 @@ fn boila_ix_del_all_txn(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, row: Vec<Bo
     let mut i: i64 = 0
     while i < vec_len(t.ixs) {
         let m = vec_get(t.ixs, i)
-        if m.col_idx < vec_len(row) {
-            let v = vec_get(row, m.col_idx)
-            let r = boila_txn_del(s, txn, boila_cf_index(), t.id, boila_ix_entry_pk(m.id, v, pkenc))
+        let vals: Vec<BoilaVal> = vec_new()
+        let mut okc: i64 = 1
+        let mut vi: i64 = 0
+        while vi < vec_len(m.cols) {
+            let cix = vec_get(m.cols, vi)
+            if cix >= 0 && cix < vec_len(row) {
+                vec_push(vals, vec_get(row, cix))
+            } else {
+                okc = 0
+            }
+            vi = vi + 1
+        }
+        if okc == 1 {
+            let r = boila_txn_del(s, txn, boila_cf_index(), t.id, boila_ix_entry_pk(m.id, vals, pkenc))
             if r.ok == 0 {
                 return r
             }
@@ -213,7 +277,9 @@ fn boila_ix_del_all_txn(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, row: Vec<Bo
 // K2b: scan only cf|table|ix_id|val prefix (not full table index CF).
 fn boila_ix_lookup(s: BoilaStore, t: BoilaTable, ix_id: i64, val: BoilaVal) -> BoilaIxLookup !IO !Time !Par {
     let pks: Vec<bytes> = vec_new()
-    let pref = boila_ix_lookup_prefix(ix_id, val)
+    let vals1: Vec<BoilaVal> = vec_new()
+    vec_push(vals1, val)
+    let pref = boila_ix_lookup_prefix(ix_id, vals1)
     let full_pref = boila_key_row(boila_cf_index(), t.id, pref)
     let plen = bytes_len(full_pref)
     let sa = boila_scan_pref_all(s, full_pref)?
@@ -225,145 +291,4 @@ fn boila_ix_lookup(s: BoilaStore, t: BoilaTable, ix_id: i64, val: BoilaVal) -> B
         j = j + 1
     }
     return BoilaIxLookup { s: s, pks: pks }
-}
-
-// first i where keys[i] >= target (sorted keys).
-fn boila_ix_key_lb(keys: Vec<bytes>, target: bytes) -> i64 {
-    let mut lo: i64 = 0
-    let mut hi = vec_len(keys)
-    while lo < hi {
-        let mid = lo + (hi - lo) / 2
-        if boila_bytes_cmp(vec_get(keys, mid), target) < 0 {
-            lo = mid + 1
-        } else {
-            hi = mid
-        }
-    }
-    return lo
-}
-
-// Fixed-width val_enc size from tag (str/bytes/json → -1).
-fn boila_ix_val_width(tag: i64) -> i64 {
-    if tag == boila_v_null() { return 1 }
-    if tag == boila_v_bool() { return 2 }
-    if tag == boila_v_i64() { return 9 }
-    if tag == boila_v_ts() { return 9 }
-    return 0 - 1
-}
-
-// K3d/f: secondary index range. Fixed val width, or var val + fixed PK.
-// has=0 → caller seq-filters; has=1 → pks are matches.
-struct BoilaIxRange {
-    s: BoilaStore,
-    ok: i64,
-    err: str,
-    state: str,
-    has: i64,
-    pks: Vec<bytes>
-}
-
-// K3h: one-shot collect + sort + lower_bound + early-stop for fixed-width
-// vals (i64/ts/bool). lo_excl/hi_excl: 1 = strict (> / <); 0 = inclusive.
-fn boila_ix_range(s: BoilaStore, t: BoilaTable, ix_id: i64, has_lo: i64, lo: BoilaVal, has_hi: i64, hi: BoilaVal, lo_excl: i64, hi_excl: i64) -> BoilaIxRange !IO !Time !Par {
-    let pks: Vec<bytes> = vec_new()
-    let mut tag: i64 = 0 - 1
-    if has_lo == 1 { tag = lo.tag }
-    if has_hi == 1 {
-        if tag >= 0 && hi.tag != tag {
-            return BoilaIxRange { s: s, ok: 0, err: "range lo/hi — различен тип", state: "42804", has: 0, pks: pks }
-        }
-        tag = hi.tag
-    }
-    let vw = boila_ix_val_width(tag)
-    let mut pw: i64 = 0 - 1
-    if t.pk_idx >= 0 && t.pk_idx < vec_len(t.cols) {
-        pw = boila_ix_val_width(vec_get(t.cols, t.pk_idx).typ)
-    }
-    if vw < 0 && pw < 0 {
-        return BoilaIxRange { s: s, ok: 1, err: "", state: "", has: 0, pks: pks }
-    }
-    let full_pref = boila_key_row(boila_cf_index(), t.id, boila_enc_u32_be(ix_id))
-    let plen = bytes_len(full_pref)
-    let sa = boila_scan_pref_all(s, full_pref)?
-    s = sa.s
-    let keys = sa.keys
-    // Fixed-width val: keys already sorted by prefix scan rebuild (K3h);
-    // lower_bound + early-stop on sort-order encoding.
-    if vw >= 0 {
-        let mut i: i64 = 0
-        if has_lo == 1 {
-            let lo_enc = boila_val_enc(lo)
-            i = boila_ix_key_lb(keys, bytes_concat(full_pref, lo_enc))
-            if lo_excl == 1 {
-                let mut skip = 1
-                while skip == 1 && i < vec_len(keys) {
-                    let body = bytes_slice(vec_get(keys, i), plen, bytes_len(vec_get(keys, i)))
-                    if bytes_len(body) >= vw && boila_bytes_cmp(bytes_slice(body, 0, vw), lo_enc) == 0 {
-                        i = i + 1
-                    } else {
-                        skip = 0
-                    }
-                }
-            }
-        }
-        let mut hi_enc = bytes_new(0)
-        if has_hi == 1 {
-            hi_enc = boila_val_enc(hi)
-        }
-        let mut go = 1
-        while go == 1 && i < vec_len(keys) {
-            let body = bytes_slice(vec_get(keys, i), plen, bytes_len(vec_get(keys, i)))
-            let bl = bytes_len(body)
-            if bl < vw {
-                i = i + 1
-            } else {
-                let venc = bytes_slice(body, 0, vw)
-                let mut past = 0
-                if has_hi == 1 {
-                    let c = boila_bytes_cmp(venc, hi_enc)
-                    if hi_excl == 1 {
-                        if c >= 0 { past = 1 }
-                    } else {
-                        if c > 0 { past = 1 }
-                    }
-                }
-                if past == 1 {
-                    go = 0
-                } else {
-                    vec_push(pks, bytes_slice(body, vw, bl))
-                    i = i + 1
-                }
-            }
-        }
-        return BoilaIxRange { s: s, ok: 1, err: "", state: "", has: 1, pks: pks }
-    }
-    // var-width val + fixed PK: linear filter (no byte-order seek)
-    let mut j: i64 = 0
-    while j < vec_len(keys) {
-        let body = bytes_slice(vec_get(keys, j), plen, bytes_len(vec_get(keys, j)))
-        let bl = bytes_len(body)
-        if pw >= 0 && bl > pw {
-            let pkv = boila_val_dec(bytes_slice(body, 0, bl - pw))
-            let mut keep = true
-            if has_lo == 1 {
-                let c = boila_val_cmp(pkv, lo)
-                if lo_excl == 1 {
-                    if c != 1 { keep = false }
-                } else {
-                    if c != 0 && c != 1 { keep = false }
-                }
-            }
-            if keep && has_hi == 1 {
-                let c = boila_val_cmp(pkv, hi)
-                if hi_excl == 1 {
-                    if c != 0 - 1 { keep = false }
-                } else {
-                    if c != 0 && c != 0 - 1 { keep = false }
-                }
-            }
-            if keep { vec_push(pks, bytes_slice(body, bl - pw, bl)) }
-        }
-        j = j + 1
-    }
-    return BoilaIxRange { s: s, ok: 1, err: "", state: "", has: 1, pks: pks }
 }

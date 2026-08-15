@@ -1,0 +1,91 @@
+// create.baga — CREATE TABLE catalog writes (split out of schema.baga at
+// P21-1 for the ≤400-line gate).
+
+import "../storage/shards.baga"
+import "../core/codec.baga"
+import "../core/value.baga"
+import "../core/row.baga"
+import "../txn/mvcc.baga"
+import "schema.baga"
+import "ddl_types.baga"
+import "ttl.baga"
+import "std/str/str.baga"
+
+// P20-2: thin auto-commit wrapper (kept for the catalog unit test;
+// SQL DDL uses the txn variant directly).
+fn boila_cat_create(s: BoilaStore, cr: BoilaCreate) -> BoilaCatRes !IO !Time !Par {
+    let b = boila_txn_begin(s, boila_txn_new(), 0, "")?
+    let r = boila_cat_create_txn(b.s, b.txn, cr)?
+    if r.ok == 0 {
+        let rb = boila_txn_rollback_s(r.s, r.txn)?
+        return BoilaCatRes { s: rb.s, ok: 0, err: r.err, state: r.state, table: r.table, id: 0 }
+    }
+    let c = boila_txn_commit(r.s, r.txn)?
+    return BoilaCatRes { s: c.s, ok: c.ok, err: c.err, state: c.state, table: r.table, id: r.id }
+}
+
+// T5: CREATE TABLE през txn buffer (rollback-able).
+fn boila_cat_create_txn(s: BoilaStore, txn: BoilaTxn, cr: BoilaCreate) -> BoilaCatTxnRes !IO !Time !Par {
+    let npk = boila_cat_pk_name(cr.table)
+    let bix = boila_txn_find(txn, boila_cf_sys(), 1, npk)
+    if bix >= 0 {
+        let w = vec_get(txn.writes, bix)
+        if w.is_del == 0 {
+            return BoilaCatTxnRes { s: s, txn: txn, ok: 0, err: concat("таблица '", concat(cr.table, "' вече съществува")), state: "42P07", table: boila_cat_empty_table(), id: 0 }
+        }
+    } else {
+        let dn = boila_get(s, boila_cf_sys(), 1, npk)?
+        s = dn.s
+        if dn.found == 1 {
+            return BoilaCatTxnRes { s: s, txn: txn, ok: 0, err: concat("таблица '", concat(cr.table, "' вече съществува")), state: "42P07", table: boila_cat_empty_table(), id: 0 }
+        }
+    }
+    let mut next: i64 = 1
+    let mpk = boila_cat_pk_meta()
+    let mix = boila_txn_find(txn, boila_cf_sys(), 1, mpk)
+    if mix >= 0 {
+        let w = vec_get(txn.writes, mix)
+        if w.is_del == 0 {
+            let mrow = boila_row_dec(w.row)
+            if vec_len(mrow) > 0 { next = vec_get(mrow, 0).i }
+        }
+    } else {
+        let dm = boila_get(s, boila_cf_sys(), 1, mpk)?
+        s = dm.s
+        if dm.found == 1 {
+            let mrow = boila_row_dec(dm.val)
+            if vec_len(mrow) > 0 { next = vec_get(mrow, 0).i }
+        }
+    }
+    let ixs0: Vec<BoilaIxMeta> = vec_new()
+    let t0 = BoilaTable { id: next, name: cr.table, cols: cr.cols, pk_idx: cr.pk_idx, ixs: ixs0, ttl_sec: cr.ttl_sec, checks: cr.checks, fks: cr.fks }
+    let r1 = boila_txn_put(s, txn, boila_cf_sys(), 1, boila_cat_pk_schema(next), boila_row_enc(boila_cat_schema_row(t0)))
+    if r1.ok == 0 {
+        return BoilaCatTxnRes { s: s, txn: r1.txn, ok: 0, err: r1.err, state: r1.state, table: boila_cat_empty_table(), id: 0 }
+    }
+    txn = r1.txn
+    let idrow: Vec<BoilaVal> = vec_new()
+    vec_push(idrow, boila_val_i64(next))
+    let r2 = boila_txn_put(s, txn, boila_cf_sys(), 1, npk, boila_row_enc(idrow))
+    if r2.ok == 0 {
+        return BoilaCatTxnRes { s: s, txn: r2.txn, ok: 0, err: r2.err, state: r2.state, table: boila_cat_empty_table(), id: 0 }
+    }
+    txn = r2.txn
+    let mrow2: Vec<BoilaVal> = vec_new()
+    vec_push(mrow2, boila_val_i64(next + 1))
+    let r3 = boila_txn_put(s, txn, boila_cf_sys(), 1, mpk, boila_row_enc(mrow2))
+    if r3.ok == 0 {
+        return BoilaCatTxnRes { s: s, txn: r3.txn, ok: 0, err: r3.err, state: r3.state, table: boila_cat_empty_table(), id: 0 }
+    }
+    txn = r3.txn
+    if cr.ttl_sec > 0 {
+        let tr: Vec<BoilaVal> = vec_new()
+        vec_push(tr, boila_val_i64(cr.ttl_sec))
+        let r4 = boila_txn_put(s, txn, boila_cf_sys(), 1, boila_ttl_pk(next), boila_row_enc(tr))
+        if r4.ok == 0 {
+            return BoilaCatTxnRes { s: s, txn: r4.txn, ok: 0, err: r4.err, state: r4.state, table: boila_cat_empty_table(), id: 0 }
+        }
+        txn = r4.txn
+    }
+    return BoilaCatTxnRes { s: s, txn: txn, ok: 1, err: "", state: "", table: t0, id: next }
+}

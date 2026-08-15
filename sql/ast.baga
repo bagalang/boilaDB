@@ -334,9 +334,10 @@ fn boila_del_empty() -> BoilaDel {
     return BoilaDel { table: "", eq_col: "", has_eq: 0, pk_eq: z, lo_col: "", has_lo: 0, pk_lo: z, hi_col: "", has_hi: 0, pk_hi: z, has_xw: 0, xw_toks: xw, has_ret: 0, ret_star: 0, ret_cols: rc }
 }
 
-// CREATE INDEX име ON таблица (колона)
+// CREATE INDEX име ON таблица (колона[, колона…])
 struct BoilaIxDef {
     ix_name: str,
     table: str,
-    col: str
+    col: str,         // първата колона (HNSW/FTW/single-col compat)
+    cols: Vec<str>    // P21-1: всички индексирани колони
 }

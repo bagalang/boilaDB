@@ -175,7 +175,9 @@ columns is a seq-filter.
 [ORDER BY cols [ASC|DESC]] )`. Default frame = RANGE UNBOUNDED
 PRECEDING (ties share the running agg). One OVER spec per query.
 `ROWS`/`RANGE`/`GROUPS` → `0A000`. No `LAG`/`LEAD`/`NTILE`, no
-named `WINDOW`.
+named `WINDOW`. `SUM`/`AVG(col)` over a NUMERIC column are
+decimal-exact and return NUMERIC (P21-5); window `MIN`/`MAX` over
+NUMERIC are still i64-only.
 
 **COPY (P14):** `COPY t [(cols)] FROM STDIN | TO STDOUT`
 `[WITH (FORMAT text|csv)]`. Text is tab-separated (`\N` null, `\.`

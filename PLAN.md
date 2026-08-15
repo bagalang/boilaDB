@@ -462,7 +462,14 @@ gaps. All sub-phases are application-agnostic.
   (`BoilaHavPred.vnum`), `sql/parse_having.baga`, `sql/exec_agg_hav.baga`.
   **Gate (passed):** `tests/boila_numagg_test` HAVING checks (gt/gte,
   int-vs-num, avg, decimal-on-i64 refusal).
-- **P21-5 — window SUM/AVG over NUMERIC.** P13 frame residual.
+- **P21-5 — window SUM/AVG over NUMERIC (LANDED).** Closes the P13
+  frame residual. `SUM(col) OVER (…) / AVG(col) OVER (…)` on a NUMERIC
+  column accumulate in a per-slot decimal payload and emit NUMERIC
+  (OID 1700); `AVG` divides by the peer count at emit. i64 windows are
+  unchanged. Window `MIN`/`MAX` over NUMERIC remain i64-only (residual).
+  Files: `sql/exec_window.baga`.
+  **Gate (passed):** `tests/boila_winnum_test` — partition SUM/AVG
+  decimal-exact + i64 no-regression; `tests/boila_window_test` green.
 - **P21-1 — multi-column UNIQUE index.** Extends P20-1 to `(a, b, …)`.
 - **P21-4 — CHECK constraints.** `CHECK (expr)` enforced on DML.
 - **P21-3 — REFERENCES / foreign keys.** Column/table-level FK with

@@ -14,8 +14,10 @@ T = транзакции, W = wire protocol, F = FTS.
   Residual: няма unquoted `12.50` в lexer-а; няма `NUMERIC(p,s)`
   проверка; index range по NUMERIC е seq (няма sort-order encode);
   `sum`/`avg` по NUMERIC чака P12b.
-- **N2 — Window / COPY / SCRAM / filter-GC / SSI / FDW / raft.**
-  Виж PLAN P13–P19. Не се пипат в P12.
+- **N2 — (FIXED P13) Window functions.** `parse_window` + `exec_window`.
+  Residual: един OVER spec; няма LAG/LEAD/NTILE/named WINDOW;
+  няма frame clause; няма window+GROUP BY.
+- **N3 — COPY / SCRAM / filter-GC / SSI / FDW / raft.** PLAN P14–P19.
 
 ## Открити 2026-08-13 (ormbaga live + `--rc` serve_pg)
 

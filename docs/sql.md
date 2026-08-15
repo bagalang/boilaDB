@@ -133,8 +133,15 @@ structural predicate): arithmetic, `||`, functions, `CASE`, `CAST`/`::`,
 `AND`/`OR`/`NOT`, `IS [NOT] DISTINCT FROM`. Top-level `OR` of mixed
 columns is a seq-filter.
 
-**Not in v1:** subqueries, window functions, more than one JOIN,
-`INTERSECT`/`EXCEPT ALL` on tables (set ops exist on dual only).
+**Window (P13):** `ROW_NUMBER()` / `RANK()` / `DENSE_RANK()` /
+`SUM`/`AVG`/`COUNT`/`MIN`/`MAX(col)` `OVER ( [PARTITION BY cols]
+[ORDER BY cols [ASC|DESC]] )`. Default frame = RANGE UNBOUNDED
+PRECEDING (ties share the running agg). One OVER spec per query.
+`ROWS`/`RANGE`/`GROUPS` → `0A000`. No `LAG`/`LEAD`/`NTILE`, no
+named `WINDOW`.
+
+**Not yet:** subqueries, more than one JOIN, `INTERSECT`/`EXCEPT ALL`
+on tables (set ops exist on dual only).
 
 ## Dual (`SELECT` without `FROM`)
 

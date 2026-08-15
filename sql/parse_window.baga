@@ -1,0 +1,154 @@
+// parse_window.baga — P13 OVER (PARTITION BY … ORDER BY …).
+import "token.baga"
+import "lexer.baga"
+import "ast.baga"
+import "parse_common.baga"
+import "std/str/str.baga"
+
+struct BoilaParseWin {
+    ok: i64,
+    win: BoilaWin,
+    pos: i64,
+    err: str,
+    state: str
+}
+
+fn boila_pw_fail(msg: str, state: str, pos: i64) -> BoilaParseWin {
+    return BoilaParseWin { ok: 0, win: boila_win_none(), pos: pos, err: msg, state: state }
+}
+
+fn boila_win_kind_rank(name: str) -> i64 {
+    if name == "row_number" { return 1 }
+    if name == "rank" { return 2 }
+    if name == "dense_rank" { return 3 }
+    return 0
+}
+
+fn boila_win_kind_from_agg(agg: i64) -> i64 {
+    if agg == 1 || agg == 2 { return 6 }
+    if agg == 3 { return 4 }
+    if agg == 4 { return 5 }
+    if agg == 5 { return 7 }
+    if agg == 6 { return 8 }
+    return 0
+}
+
+// OVER ( [PARTITION BY col, …] [ORDER BY col [ASC|DESC], …] )
+fn boila_parse_over(l: BoilaLex, i: i64) -> BoilaParseWin {
+    if tok_kw(boila_ps_tok(l, i), "over") != 1 {
+        return boila_pw_fail("очаквах OVER", "42601", i)
+    }
+    if boila_ps_tok(l, i + 1).kind != tok_lparen() {
+        return boila_pw_fail("очаквах '(' след OVER", "42601", i)
+    }
+    let mut p = i + 2
+    let mut w = boila_win_none()
+    if tok_kw(boila_ps_tok(l, p), "partition") == 1 {
+        if tok_kw(boila_ps_tok(l, p + 1), "by") != 1 {
+            return boila_pw_fail("очаквах BY след PARTITION", "42601", p)
+        }
+        p = p + 2
+        let mut more = true
+        while more {
+            let c = boila_ps_tok(l, p)
+            if c.kind != tok_ident() {
+                return boila_pw_fail("очаквах колона в PARTITION BY", "42601", p)
+            }
+            vec_push(w.part, c.txt)
+            p = p + 1
+            if boila_ps_tok(l, p).kind == tok_comma() {
+                p = p + 1
+            } else {
+                more = false
+            }
+        }
+    }
+    if tok_kw(boila_ps_tok(l, p), "order") == 1 {
+        if tok_kw(boila_ps_tok(l, p + 1), "by") != 1 {
+            return boila_pw_fail("очаквах BY след ORDER", "42601", p)
+        }
+        p = p + 2
+        let mut more = true
+        while more {
+            let c = boila_ps_tok(l, p)
+            if c.kind != tok_ident() {
+                return boila_pw_fail("очаквах колона в ORDER BY", "42601", p)
+            }
+            vec_push(w.ord, c.txt)
+            p = p + 1
+            let mut desc: i64 = 0
+            if tok_kw(boila_ps_tok(l, p), "desc") == 1 {
+                desc = 1
+                p = p + 1
+            } else {
+                if tok_kw(boila_ps_tok(l, p), "asc") == 1 {
+                    p = p + 1
+                }
+            }
+            vec_push(w.desc, desc)
+            if boila_ps_tok(l, p).kind == tok_comma() {
+                p = p + 1
+            } else {
+                more = false
+            }
+        }
+    }
+    let fr = boila_ps_tok(l, p)
+    if tok_kw(fr, "rows") == 1 || tok_kw(fr, "range") == 1 || tok_kw(fr, "groups") == 1 {
+        return boila_pw_fail("ROWS/RANGE/GROUPS frame — 0A000 (P13 residual)", "0A000", p)
+    }
+    if fr.kind != tok_rparen() {
+        return boila_pw_fail(concat("очаквах ')' в OVER, получих '", concat(fr.txt, "'")), "42601", p)
+    }
+    return BoilaParseWin { ok: 1, win: w, pos: p + 1, err: "", state: "" }
+}
+
+fn boila_item_set_win(item: BoilaSelItem, kind: i64, ov: BoilaWin) -> BoilaSelItem {
+    ov.kind = kind
+    item.win = ov
+    item.agg = 0
+    return item
+}
+
+// Ranking fn() OVER (…) or agg(…) OVER (…).
+fn boila_ps_item_or_win(l: BoilaLex, i: i64) -> BoilaPsItem {
+    let t = boila_ps_tok(l, i)
+    let rk = boila_win_kind_rank(t.txt)
+    if rk > 0 && t.kind == tok_ident() {
+        if boila_ps_tok(l, i + 1).kind != tok_lparen() {
+            return BoilaPsItem { ok: 0, item: boila_sel_item_col(""), pos: i, err: concat(t.txt, " изисква ()"), state: "42601" }
+        }
+        if boila_ps_tok(l, i + 2).kind != tok_rparen() {
+            return BoilaPsItem { ok: 0, item: boila_sel_item_col(""), pos: i, err: concat(t.txt, "() не приема аргументи"), state: "42601" }
+        }
+        let ov = boila_parse_over(l, i + 3)
+        if ov.ok == 0 {
+            if tok_kw(boila_ps_tok(l, i + 3), "over") != 1 {
+                return BoilaPsItem { ok: 0, item: boila_sel_item_col(""), pos: i, err: concat(t.txt, "() изисква OVER"), state: "42601" }
+            }
+            return BoilaPsItem { ok: 0, item: boila_sel_item_col(""), pos: i, err: ov.err, state: ov.state }
+        }
+        let it = boila_item_set_win(boila_sel_item_col(""), rk, ov.win)
+        return boila_ps_item_alias(l, it, ov.pos)
+    }
+    let it = boila_ps_item(l, i)
+    if it.ok == 0 {
+        return it
+    }
+    if tok_kw(boila_ps_tok(l, it.pos), "over") != 1 {
+        return it
+    }
+    let wk = boila_win_kind_from_agg(it.item.agg)
+    if wk == 0 {
+        return BoilaPsItem { ok: 0, item: it.item, pos: it.pos, err: "OVER изисква row_number/rank/dense_rank/sum/avg/count/min/max", state: "0A000" }
+    }
+    if vec_len(it.item.xtoks) > 0 {
+        return BoilaPsItem { ok: 0, item: it.item, pos: it.pos, err: "window agg с израз — 0A000 (P13 residual)", state: "0A000" }
+    }
+    let ov = boila_parse_over(l, it.pos)
+    if ov.ok == 0 {
+        return BoilaPsItem { ok: 0, item: it.item, pos: it.pos, err: ov.err, state: ov.state }
+    }
+    let witem = boila_item_set_win(it.item, wk, ov.win)
+    return boila_ps_item_alias(l, witem, ov.pos)
+}

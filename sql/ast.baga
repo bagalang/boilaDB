@@ -38,6 +38,22 @@ fn boila_hav_bin(kind: i64, a: i64, b: i64) -> BoilaHavNode {
     return BoilaHavNode { kind: kind, leaf: 0 - 1, a: a, b: b }
 }
 
+// P13 window: kind 0=none, 1=row_number, 2=rank, 3=dense_rank,
+// 4=sum, 5=avg, 6=count, 7=min, 8=max. col holds the agg argument.
+struct BoilaWin {
+    kind: i64,
+    part: Vec<str>,
+    ord: Vec<str>,
+    desc: Vec<i64>
+}
+
+fn boila_win_none() -> BoilaWin {
+    let p: Vec<str> = vec_new()
+    let o: Vec<str> = vec_new()
+    let d: Vec<i64> = vec_new()
+    return BoilaWin { kind: 0, part: p, ord: o, desc: d }
+}
+
 struct BoilaSelItem {
     agg: i64,   // 0 колона, 1 count(*), 2 count(col|expr), 3 sum, 4 avg, 5 min, 6 max
     col: str,
@@ -50,7 +66,8 @@ struct BoilaSelItem {
     sfn_vals: Vec<BoilaVal>,
     // Q-expr / Q-aexpr: when agg==0 → projection expr; when agg>0 →
     // aggregate argument expression (sum(sal+1)); bare col uses col.
-    xtoks: Vec<Token>
+    xtoks: Vec<Token>,
+    win: BoilaWin
 }
 
 struct BoilaSel {
@@ -126,39 +143,39 @@ fn boila_sel_item_col(name: str) -> BoilaSelItem {
     let fc: Vec<str> = vec_new()
     let fv: Vec<BoilaVal> = vec_new()
     let xt: Vec<Token> = vec_new()
-    return BoilaSelItem { agg: 0, col: name, biv: 0, alias: "", sfn: "", sfn_cols: fc, sfn_vals: fv, xtoks: xt }
+    return BoilaSelItem { agg: 0, col: name, biv: 0, alias: "", sfn: "", sfn_cols: fc, sfn_vals: fv, xtoks: xt, win: boila_win_none() }
 }
 
 fn boila_sel_item_agg(kind: i64, col: str) -> BoilaSelItem {
     let fc: Vec<str> = vec_new()
     let fv: Vec<BoilaVal> = vec_new()
     let xt: Vec<Token> = vec_new()
-    return BoilaSelItem { agg: kind, col: col, biv: 0, alias: "", sfn: "", sfn_cols: fc, sfn_vals: fv, xtoks: xt }
+    return BoilaSelItem { agg: kind, col: col, biv: 0, alias: "", sfn: "", sfn_cols: fc, sfn_vals: fv, xtoks: xt, win: boila_win_none() }
 }
 
 // Q-aexpr: aggregate over an expression argument (sum(a+1), count(upper(c))).
 fn boila_sel_item_agg_x(kind: i64, xtoks: Vec<Token>) -> BoilaSelItem {
     let fc: Vec<str> = vec_new()
     let fv: Vec<BoilaVal> = vec_new()
-    return BoilaSelItem { agg: kind, col: "", biv: 0, alias: "", sfn: "", sfn_cols: fc, sfn_vals: fv, xtoks: xtoks }
+    return BoilaSelItem { agg: kind, col: "", biv: 0, alias: "", sfn: "", sfn_cols: fc, sfn_vals: fv, xtoks: xtoks, win: boila_win_none() }
 }
 
 fn boila_sel_item_bucket(col: str, iv: i64) -> BoilaSelItem {
     let fc: Vec<str> = vec_new()
     let fv: Vec<BoilaVal> = vec_new()
     let xt: Vec<Token> = vec_new()
-    return BoilaSelItem { agg: 0, col: col, biv: iv, alias: "", sfn: "", sfn_cols: fc, sfn_vals: fv, xtoks: xt }
+    return BoilaSelItem { agg: 0, col: col, biv: iv, alias: "", sfn: "", sfn_cols: fc, sfn_vals: fv, xtoks: xt, win: boila_win_none() }
 }
 
 fn boila_sel_item_sfn(fnm: str, cols: Vec<str>, vals: Vec<BoilaVal>) -> BoilaSelItem {
     let xt: Vec<Token> = vec_new()
-    return BoilaSelItem { agg: 0, col: "", biv: 0, alias: "", sfn: fnm, sfn_cols: cols, sfn_vals: vals, xtoks: xt }
+    return BoilaSelItem { agg: 0, col: "", biv: 0, alias: "", sfn: fnm, sfn_cols: cols, sfn_vals: vals, xtoks: xt, win: boila_win_none() }
 }
 
 fn boila_sel_item_expr(toks: Vec<Token>) -> BoilaSelItem {
     let fc: Vec<str> = vec_new()
     let fv: Vec<BoilaVal> = vec_new()
-    return BoilaSelItem { agg: 0, col: "", biv: 0, alias: "", sfn: "", sfn_cols: fc, sfn_vals: fv, xtoks: toks }
+    return BoilaSelItem { agg: 0, col: "", biv: 0, alias: "", sfn: "", sfn_cols: fc, sfn_vals: fv, xtoks: toks, win: boila_win_none() }
 }
 
 // Output column name: alias > expr > sfn name > time_bucket > col.
@@ -178,6 +195,14 @@ fn boila_sel_item_out_name(it: BoilaSelItem) -> str {
     if it.biv > 0 {
         return "time_bucket"
     }
+    if it.win.kind == 1 { return "row_number" }
+    if it.win.kind == 2 { return "rank" }
+    if it.win.kind == 3 { return "dense_rank" }
+    if it.win.kind == 4 { return "sum" }
+    if it.win.kind == 5 { return "avg" }
+    if it.win.kind == 6 { return "count" }
+    if it.win.kind == 7 { return "min" }
+    if it.win.kind == 8 { return "max" }
     return it.col
 }
 

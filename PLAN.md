@@ -255,16 +255,18 @@
 
 ## P13 — Window функции
 
-- `fn() OVER (PARTITION BY … ORDER BY …)`: `ROW_NUMBER`, `RANK`,
-  `DENSE_RANK`, `SUM`/`AVG`/`COUNT`/`MIN`/`MAX`.
-- Първи разрез: default frame = `RANGE UNBOUNDED PRECEDING`
-  (стандартният PG default за тези fn). `ROWS BETWEEN` → `0A000`.
-- Parser: `WINDOW` вече е резервирана дума; exec след ORDER BY на
-  партицията (преизползва `exec_sort`).
-- **Гейт:** `boila_window_test` — row_number по dept; running sum;
-  restart не пипа резултата (чисто изчисление).
-- Residual: няма named `WINDOW w AS (…)`; няма `NTILE`/`LAG`/`LEAD`
-  в първия разрез.
+- Реализирано: `ROW_NUMBER` / `RANK` / `DENSE_RANK` / `SUM` / `AVG` /
+  `COUNT` / `MIN` / `MAX` `OVER ( [PARTITION BY …] [ORDER BY …] )`.
+  Default frame = **RANGE UNBOUNDED PRECEDING** (peer group inclusive).
+  `ROWS`/`RANGE`/`GROUPS` изрично → `0A000`.
+  Файлове: `sql/parse_window.baga`, `sql/exec_window.baga`.
+- **Гейт (минат):** `tests/boila_window_test` — row_number по dept;
+  RANK/DENSE_RANK при равен sal; running SUM (двамата с 20 виждат 40);
+  `COUNT(*) OVER ()`; ROWS BETWEEN → 0A000; различни OVER spec →
+  0A000; restart.
+- Residual: един OVER spec на заявка; няма named `WINDOW w AS`;
+  няма `NTILE`/`LAG`/`LEAD`; window agg с израз (`sum(sal+1)`) —
+  0A000; няма mix с GROUP BY.
 
 ## P14 — COPY
 

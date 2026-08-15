@@ -127,6 +127,7 @@ Honest list so drivers do not guess:
 
 - No TLS, no SCRAM.
 - No `COPY`, no `LISTEN`/`NOTIFY`, no replication.
+- Window functions: P13 (`ROW_NUMBER`/`RANK`/`SUM` `OVER …`).
 - No `"Quoted"` identifiers — bare names only.
 - No `SERIAL`, `DEFAULT`, `NOT NULL`, `REFERENCES`, arrays.
 - `NUMERIC` is P12 (OID 1700, text format).

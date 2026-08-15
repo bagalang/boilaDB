@@ -36,9 +36,8 @@ the SQL flagship on top of the RocksDB-class engine:
 
 ## Status
 
-Phases **P0–P11** landed; **P12 NUMERIC** is in (bagadecimal, tag 9).
-P13–P19 (window, COPY, SCRAM, filter-GC, serializable, FDW, raft) are
-in [PLAN.md](PLAN.md). Concurrent HTTP + PG: bounded `BOILA_WORKERS`
+Phases **P0–P13** landed (P12 NUMERIC, P13 window). P14–P19 (COPY,
+SCRAM, filter-GC, serializable, FDW, raft) are in [PLAN.md](PLAN.md). Concurrent HTTP + PG: bounded `BOILA_WORKERS`
 pool (default 4; `=0` → `go_bg` per conn), hop-less per-shard stores,
 shared per-db plan cache. Data SQL is a shared lock; schema DDL is
 exclusive per database. No SCRAM/TLS yet (P15 / gaps W6).

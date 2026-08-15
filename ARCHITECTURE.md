@@ -230,7 +230,9 @@ IS [NOT] NULL AND OR NOT`), `ORDER BY … ASC|DESC [NULLS FIRST|LAST]`,
 `WITH RECURSIVE`, `CASE`, аритметика. Dual (без FROM): литерали
 (bool/NULL), builtins (`version`/`current_*`/`now`/`current_setting`/
 `pg_*`/`COALESCE`/`NULLIF`), `+ - * /` (*/> +-), `||`, `CAST`/`::`.
-  Подзаявки — не. Window функции — P13.
+  Подзаявки — не. Window: `ROW_NUMBER`/`RANK`/`DENSE_RANK`/
+  `SUM`/`AVG`/`COUNT`/`MIN`/`MAX` `OVER (PARTITION BY … ORDER BY …)`
+  (P13; default RANGE UNBOUNDED PRECEDING).
 
 **Транзакции:** `BEGIN [READ ONLY] / COMMIT / ROLLBACK`, snapshot
 isolation (P17: `SERIALIZABLE` → `40001` на rw-конфликт), `$1..$n`

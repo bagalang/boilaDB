@@ -1,0 +1,293 @@
+// exec_window.baga — P13 window exec. One OVER spec per query.
+// Default frame = RANGE UNBOUNDED PRECEDING (peer group inclusive).
+import "../core/value.baga"
+import "../catalog/schema.baga"
+import "../txn/mvcc.baga"
+import "../storage/shards.baga"
+import "ast.baga"
+import "exec_scan.baga"
+import "exec_proj.baga"
+import "exec_sort.baga"
+import "std/str/str.baga"
+
+fn boila_sel_has_win(sel: BoilaSel) -> i64 {
+    let mut i: i64 = 0
+    while i < vec_len(sel.items) {
+        if vec_get(sel.items, i).win.kind > 0 {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+fn boila_win_spec_eq(a: BoilaWin, b: BoilaWin) -> i64 {
+    if vec_len(a.part) != vec_len(b.part) || vec_len(a.ord) != vec_len(b.ord) {
+        return 0
+    }
+    let mut i: i64 = 0
+    while i < vec_len(a.part) {
+        if vec_get(a.part, i) != vec_get(b.part, i) { return 0 }
+        i = i + 1
+    }
+    i = 0
+    while i < vec_len(a.ord) {
+        if vec_get(a.ord, i) != vec_get(b.ord, i) { return 0 }
+        if i < vec_len(a.desc) && i < vec_len(b.desc) {
+            if vec_get(a.desc, i) != vec_get(b.desc, i) { return 0 }
+        }
+        i = i + 1
+    }
+    return 1
+}
+
+fn boila_win_keys_eq(a: Vec<BoilaVal>, b: Vec<BoilaVal>, idxs: Vec<i64>) -> i64 {
+    let mut i: i64 = 0
+    while i < vec_len(idxs) {
+        let ix = vec_get(idxs, i)
+        let mut av = boila_val_null()
+        let mut bv = boila_val_null()
+        if ix >= 0 && ix < vec_len(a) { av = vec_get(a, ix) }
+        if ix >= 0 && ix < vec_len(b) { bv = vec_get(b, ix) }
+        if boila_val_cmp(av, bv) != 0 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn boila_win_span_end(rows: Vec<Vec<BoilaVal>>, start: i64, lim: i64, idxs: Vec<i64>) -> i64 {
+    if vec_len(idxs) == 0 { return lim }
+    let key = vec_get(rows, start)
+    let mut i = start + 1
+    while i < lim {
+        if boila_win_keys_eq(key, vec_get(rows, i), idxs) == 0 {
+            return i
+        }
+        i = i + 1
+    }
+    return lim
+}
+
+fn boila_win_i64(v: BoilaVal) -> i64 {
+    if v.tag == boila_v_null() { return 0 }
+    return v.i
+}
+
+fn boila_win_acc(kind: i64, acc: i64, cnt: i64, v: BoilaVal, first: i64) -> i64 {
+    if kind == 6 {
+        if v.tag == boila_v_null() { return acc }
+        return acc + 1
+    }
+    if v.tag == boila_v_null() { return acc }
+    let x = boila_win_i64(v)
+    if kind == 4 { return acc + x }
+    if kind == 5 { return acc + x }
+    if kind == 7 {
+        if first == 1 { return x }
+        if x < acc { return x }
+        return acc
+    }
+    if kind == 8 {
+        if first == 1 { return x }
+        if x > acc { return x }
+        return acc
+    }
+    return acc
+}
+
+fn boila_win_out(kind: i64, acc: i64, cnt: i64) -> BoilaVal {
+    if kind == 5 {
+        if cnt == 0 { return boila_val_null() }
+        return boila_val_i64(acc / cnt)
+    }
+    if kind == 6 { return boila_val_i64(acc) }
+    return boila_val_i64(acc)
+}
+
+fn boila_win_select(s: BoilaStore, txn: BoilaTxn, cols: Vec<BoilaColDef>, rows: Vec<Vec<BoilaVal>>, sel: BoilaSel) -> BoilaExec {
+    let mut wspec = boila_win_none()
+    let mut have: i64 = 0
+    let mut i: i64 = 0
+    while i < vec_len(sel.items) {
+        let it = vec_get(sel.items, i)
+        if it.agg > 0 && it.win.kind == 0 {
+            return boila_exec_fail(s, txn, "window + GROUP BY/агрегат — 0A000", "0A000")
+        }
+        if it.win.kind > 0 {
+            if have == 0 {
+                wspec = it.win
+                have = 1
+            } else {
+                if boila_win_spec_eq(wspec, it.win) == 0 {
+                    return boila_exec_fail(s, txn, "различни OVER spec — 0A000 (P13 residual)", "0A000")
+                }
+            }
+        }
+        i = i + 1
+    }
+    if sel.has_group == 1 {
+        return boila_exec_fail(s, txn, "window + GROUP BY — 0A000", "0A000")
+    }
+    let sidx: Vec<i64> = vec_new()
+    let sdesc: Vec<i64> = vec_new()
+    let pidx: Vec<i64> = vec_new()
+    let oidx: Vec<i64> = vec_new()
+    i = 0
+    while i < vec_len(wspec.part) {
+        let ix = boila_col_idx_of(cols, vec_get(wspec.part, i))
+        if ix < 0 {
+            return boila_exec_fail(s, txn, concat("PARTITION BY колона '", concat(vec_get(wspec.part, i), "' не съществува")), "42703")
+        }
+        vec_push(sidx, ix)
+        vec_push(sdesc, 0)
+        vec_push(pidx, ix)
+        i = i + 1
+    }
+    i = 0
+    while i < vec_len(wspec.ord) {
+        let ix = boila_col_idx_of(cols, vec_get(wspec.ord, i))
+        if ix < 0 {
+            return boila_exec_fail(s, txn, concat("OVER ORDER BY колона '", concat(vec_get(wspec.ord, i), "' не съществува")), "42703")
+        }
+        let mut d: i64 = 0
+        if i < vec_len(wspec.desc) { d = vec_get(wspec.desc, i) }
+        vec_push(sidx, ix)
+        vec_push(sdesc, d)
+        vec_push(oidx, ix)
+        i = i + 1
+    }
+    if vec_len(sidx) > 0 {
+        boila_sort_rows(rows, sidx, sdesc)
+    }
+    let mut res = boila_result_empty()
+    let pcols: Vec<i64> = vec_new()
+    let kinds: Vec<i64> = vec_new()
+    let acols: Vec<i64> = vec_new()
+    i = 0
+    while i < vec_len(sel.items) {
+        let it = vec_get(sel.items, i)
+        if it.win.kind > 0 {
+            let mut ty = boila_v_i64()
+            boila_result_add_col(res, boila_sel_item_out_name(it), ty)
+            vec_push(pcols, 0 - 1)
+            vec_push(kinds, it.win.kind)
+            let mut ax: i64 = 0 - 1
+            if it.win.kind >= 4 && it.col != "" {
+                ax = boila_col_idx_of(cols, it.col)
+                if ax < 0 {
+                    return boila_exec_fail(s, txn, concat("колона '", concat(it.col, "' не съществува")), "42703")
+                }
+            }
+            vec_push(acols, ax)
+        } else {
+            let ix = boila_col_idx_of(cols, it.col)
+            if ix < 0 {
+                return boila_exec_fail(s, txn, concat("колона '", concat(it.col, "' не съществува")), "42703")
+            }
+            let cd = vec_get(cols, ix)
+            boila_result_add_col(res, boila_sel_item_out_name(it), cd.typ)
+            vec_push(pcols, ix)
+            vec_push(kinds, 0)
+            vec_push(acols, 0 - 1)
+        }
+        i = i + 1
+    }
+    let n = vec_len(rows)
+    let mut p0: i64 = 0
+    while p0 < n {
+        let p1 = boila_win_span_end(rows, p0, n, pidx)
+        let mut accs: Vec<i64> = vec_new()
+        let mut cnts: Vec<i64> = vec_new()
+        let mut firsts: Vec<i64> = vec_new()
+        i = 0
+        while i < vec_len(kinds) {
+            vec_push(accs, 0)
+            vec_push(cnts, 0)
+            vec_push(firsts, 1)
+            i = i + 1
+        }
+        let mut pos = 1
+        let mut rank = 1
+        let mut dense = 1
+        let mut g0 = p0
+        while g0 < p1 {
+            let g1 = boila_win_span_end(rows, g0, p1, oidx)
+            i = 0
+            while i < vec_len(kinds) {
+                let knd = vec_get(kinds, i)
+                if knd >= 4 {
+                    let mut r = g0
+                    while r < g1 {
+                        let row = vec_get(rows, r)
+                        let ax = vec_get(acols, i)
+                        let mut v = boila_val_null()
+                        if ax >= 0 && ax < vec_len(row) { v = vec_get(row, ax) }
+                        else { if knd == 6 { v = boila_val_i64(1) } }
+                        vec_set(accs, i, boila_win_acc(knd, vec_get(accs, i), vec_get(cnts, i), v, vec_get(firsts, i)))
+                        if v.tag != boila_v_null() || knd == 6 {
+                            vec_set(cnts, i, vec_get(cnts, i) + 1)
+                            vec_set(firsts, i, 0)
+                        }
+                        r = r + 1
+                    }
+                }
+                i = i + 1
+            }
+            let mut r = g0
+            while r < g1 {
+                let src = vec_get(rows, r)
+                let out: Vec<BoilaVal> = vec_new()
+                i = 0
+                while i < vec_len(kinds) {
+                    let knd = vec_get(kinds, i)
+                    if knd == 0 {
+                        let ix = vec_get(pcols, i)
+                        if ix >= 0 && ix < vec_len(src) {
+                            vec_push(out, vec_get(src, ix))
+                        } else {
+                            vec_push(out, boila_val_null())
+                        }
+                    } else {
+                        if knd == 1 {
+                            vec_push(out, boila_val_i64(pos))
+                        } else {
+                            if knd == 2 {
+                                vec_push(out, boila_val_i64(rank))
+                            } else {
+                                if knd == 3 {
+                                    vec_push(out, boila_val_i64(dense))
+                                } else {
+                                    vec_push(out, boila_win_out(knd, vec_get(accs, i), vec_get(cnts, i)))
+                                }
+                            }
+                        }
+                    }
+                    i = i + 1
+                }
+                vec_push(res.rows, out)
+                pos = pos + 1
+                r = r + 1
+            }
+            rank = pos
+            dense = dense + 1
+            g0 = g1
+        }
+        p0 = p1
+    }
+    if sel.has_order == 1 {
+        let idxs: Vec<i64> = vec_new()
+        i = 0
+        while i < vec_len(sel.ord_cols) {
+            let nm = vec_get(sel.ord_cols, i)
+            let ix = boila_col_name_idx(res.cols, nm)
+            if ix < 0 {
+                return boila_exec_fail(s, txn, concat("ORDER BY колона '", concat(nm, "' не е в изхода")), "42703")
+            }
+            vec_push(idxs, ix)
+            i = i + 1
+        }
+        boila_sort_rows(res.rows, idxs, sel.ord_desc)
+    }
+    res.rows = boila_apply_offlim(res.rows, sel.offset, sel.limit)
+    return boila_exec_ok_select(s, txn, res)
+}

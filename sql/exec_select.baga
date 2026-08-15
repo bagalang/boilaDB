@@ -18,6 +18,7 @@ import "exec_agg_stream.baga"
 import "exec_agg_scan.baga"
 import "exec_join.baga"
 import "exec_sort.baga"
+import "exec_window.baga"
 import "exec_dual_ops.baga"
 import "exec_dual_fn.baga"
 import "exec_dual_parse.baga"
@@ -102,6 +103,9 @@ fn boila_exec_select(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, sel: BoilaSel)
             return boila_exec_fail(s, txn, xf.err, xf.state)
         }
         rows = xf.rows
+    }
+    if boila_sel_has_win(sel) == 1 {
+        return boila_win_select(s, txn, cols, rows, sel)
     }
 
     if has_agg == true || sel.has_group == 1 {

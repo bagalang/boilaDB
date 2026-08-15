@@ -3,6 +3,7 @@ import "token.baga"
 import "lexer.baga"
 import "ast.baga"
 import "parse_common.baga"
+import "parse_window.baga"
 import "parse_where.baga"
 import "parse_having.baga"
 import "tsquery.baga"
@@ -52,7 +53,7 @@ fn boila_parse_select(l: BoilaLex) -> BoilaParseSel {
     } else {
         let mut more = true
         while more {
-            let it = boila_ps_item(l, i)
+            let it = boila_ps_item_or_win(l, i)
             if it.ok == 0 {
                 return boila_ps_fail(it.err, it.state)
             }

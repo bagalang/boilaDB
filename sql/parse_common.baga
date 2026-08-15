@@ -116,8 +116,11 @@ fn boila_ps_item_alias(l: BoilaLex, item: BoilaSelItem, pos: i64) -> BoilaPsItem
         item.alias = a.txt
         return BoilaPsItem { ok: 1, item: item, pos: pos + 2, err: "", state: "" }
     }
-    // bare alias: SELECT col alias FROM … (not a clause keyword)
+    // bare alias: SELECT col alias FROM … (not a clause keyword / OVER)
     let n = boila_ps_tok(l, pos)
+    if tok_kw(n, "over") == 1 {
+        return BoilaPsItem { ok: 1, item: item, pos: pos, err: "", state: "" }
+    }
     if n.kind == tok_ident() && boila_ps_is_clause_kw(n) == 0 {
         item.alias = n.txt
         return BoilaPsItem { ok: 1, item: item, pos: pos + 1, err: "", state: "" }

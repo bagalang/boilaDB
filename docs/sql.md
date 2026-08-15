@@ -194,21 +194,20 @@ No `DISTINCT` inside aggregates.
 
 ```sql
 BEGIN [READ ONLY];
+BEGIN ISOLATION LEVEL SERIALIZABLE [READ ONLY];
+BEGIN ISOLATION LEVEL REPEATABLE READ;
 COMMIT;          -- alias: END
 ROLLBACK;        -- alias: ABORT
 VACUUM;          -- flush + full compact; MVCC GC (P16)
 ```
 
-Isolation is a **per-session write buffer**: storage is unchanged until
-`COMMIT`. Readers see committed data plus the session’s own buffer.
-Error mid-statement rolls the whole buffer back. Crash before commit
-leaves nothing durable.
+Default / `READ COMMITTED` is latest-read + write buffer (no SSI).
+`REPEATABLE READ` sees versions with `lsn ≤` snapshot. `SERIALIZABLE`
+is the same plus commit check: a concurrent write of a key this txn
+read or wrote → `40001`. `DEFERRABLE` → `0A000`. No predicate locks.
 
 `BEGIN` in an open txn → `25001`. Writes in `READ ONLY` → `25006`.
 Buffer overflow → `54000` (`BOILA_TXN_MAX`).
-
-This is not multi-version keys + a commit sequencer (gaps T2).
-Serializable / 2PC / distributed txns are out of v1.
 
 ## Session GUC
 
@@ -247,4 +246,5 @@ rows and execution time in ms.
 | `53300` | Too many connections |
 | `54000` | Program limit (budget scan/rows, txn buffer) |
 | `55006` | Drop current database |
+| `40001` | Serialization failure (P17) |
 | `57014` | Query canceled (wall deadline) |

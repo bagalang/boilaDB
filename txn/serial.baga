@@ -1,0 +1,31 @@
+// serial.baga — snapshot GET as-of LSN (P17). isol константите и
+// commit check живеят в mvcc.baga, за да няма цикъл serial↔mvcc.
+
+import "../storage/shards.baga"
+import "../storage/shards_kv.baga"
+import "../core/codec.baga"
+import "rocksbaga/db/engine.baga"
+import "rocksbaga/db/shard.baga"
+
+fn boila_isol_rc() -> i64 { return 0 }
+fn boila_isol_rr() -> i64 { return 1 }
+fn boila_isol_ser() -> i64 { return 2 }
+
+fn boila_get_asof(s: BoilaStore, cf: i64, table_id: i64, pk: bytes, max_lsn: i64) -> BoilaGet !IO !Time !Par {
+    let base = boila_key_row(cf, table_id, pk)
+    let ix = lsm_shard_ix_b(s.n, base)
+    if s.dbs_h == 0 {
+        let g = boila_kv_get_asof(vec_get(s.c.shards, ix), cf, base, max_lsn)?
+        vec_set(s.c.shards, ix, g.db)
+        return BoilaGet {
+            s: BoilaStore { c: s.c, dbs_h: 0, mus_h: 0, n: s.c.n, ok: g.db.ok },
+            found: g.found, val: g.val
+        }
+    }
+    let mu = boila_shard_lock(s, ix)?
+    let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
+    let g = boila_kv_get_asof(map_get(dbs, ix), cf, base, max_lsn)?
+    map_set(dbs, ix, g.db)
+    mutex_unlock(mu)
+    return BoilaGet { s: s, found: g.found, val: g.val }
+}

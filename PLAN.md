@@ -321,15 +321,16 @@ sweeper чете.
 ## P17 — Serializable
 
 Днешният модел е едно-сесиен buffered snapshot (T2). Serializable
-изисква rw-конфликт при commit, не пълна SSI от ден 1.
+е rw/ww проверка на commit, не пълна SSI от ден 1.
 
-- `BEGIN ISOLATION LEVEL SERIALIZABLE` (и `REPEATABLE READ` = днешният
-  snapshot). Default остава snapshot / read committed-еквивалент.
-- Commit: write-write → `40001`; read-write (пишецът пипа ключ, четен
-  от по-стар snapshot) → `40001`. Predicate/phantom locks — residual.
-- **Гейт:** двама клиенти, A чете ред, B update+commit, A update същия
-  ред → A abort `40001`; без конфликт — и двамата commit.
-- Residual: няма SIREAD по range; няма `DEFERRABLE`.
+- `BEGIN ISOLATION LEVEL SERIALIZABLE` (и `REPEATABLE READ` = snapshot
+  GET `lsn ≤` begin). Default / `READ COMMITTED` = latest, без SSI.
+- Commit: write-write и read-write (ключове в read/write set с
+  committed `lsn > snapshot`) → `40001`. Два `BoilaTxn` върху един store.
+- **Гейт (минат):** `tests/boila_serial_test` — A чете, B update+commit,
+  A update същия ред → `40001`; различни редове — и двамата commit;
+  гол `BEGIN` не abort-ва. `DEFERRABLE` → `0A000`.
+- Residual: няма SIREAD по range; няма `DEFERRABLE`; implicit DML е RC.
 
 ## P18 — Cross-database заявки / FDW
 

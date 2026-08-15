@@ -94,7 +94,7 @@ fn boila_exec_sql_mu(s: BoilaStore, txn: BoilaTxn, db: str, sql: str, pc: BoilaP
             return boila_sql_fail(s, txn, pc, p.err, p.state)
         }
         if p.op == 1 {
-            let b = boila_txn_begin(s, txn, p.read_only, db)?
+            let b = boila_txn_begin_isol(s, txn, p.read_only, db, p.isol)?
             if b.ok == 0 {
                 return boila_sql_fail(b.s, b.txn, pc, b.err, b.state)
             }

@@ -106,6 +106,20 @@ fn boila_store_key(cf: i64, table_id: i64, pk: bytes, val: bytes) -> bytes {
     return base
 }
 
+fn boila_key_ver_lsn(key: bytes) -> i64 {
+    let n = bytes_len(key)
+    if n < 8 {
+        return 0 - 1
+    }
+    let mut x: i64 = 0
+    let mut i: i64 = 0
+    while i < 8 {
+        x = (x << 8) | ((bytes_at(key, n - 8 + i) ^ 255) & 255)
+        i = i + 1
+    }
+    return x
+}
+
 fn boila_pk_from_key(key: bytes) -> bytes {
     let n = bytes_len(key)
     if n < 5 {

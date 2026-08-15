@@ -153,7 +153,9 @@ rocksbaga при същия хардуер (моделът на scorecard-ите
   `40001 serialization_failure` на втория commit.
 - Recovery: при replay недоcommit-нати intents се отхвърлят; commit
   ticket-ът е единственият източник на истина.
-- Serializable, 2PC, разпределени транзакции — извън v1 (честно).
+- **P17 SERIALIZABLE:** `BEGIN ISOLATION LEVEL SERIALIZABLE` +
+  snapshot GET и commit check (ww/rw → `40001`). Няма SIREAD/predicate
+  locks; `DEFERRABLE` е `0A000`. 2PC / разпределени txn — извън v1.
 
 ### catalog/ + index/
 - `catalog/` — `sys` key-space: таблици, колони, типове, индекси,

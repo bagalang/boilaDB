@@ -9,6 +9,7 @@ import "../storage/shards.baga"
 import "../storage/shards_wal.baga"
 import "../storage/shards_keys.baga"
 import "gc_filter.baga"
+import "serial.baga"
 import "../core/codec.baga"
 import "../core/value.baga"
 import "../core/row.baga"
@@ -27,13 +28,20 @@ struct BoilaTxnWrite {
     ttl_sec: i64
 }
 
+struct BoilaTxnRead {
+    table_id: i64,
+    pk: bytes
+}
+
 struct BoilaTxn {
     active: i64,
     read_only: i64,
     snapshot_lsn: i64,
     db: str,        // базата, в която е започната (една транзакция = една база)
     writes: Vec<BoilaTxnWrite>,
-    max_writes: i64 // T6; 0 = unlimited
+    max_writes: i64, // T6; 0 = unlimited
+    isol: i64,       // 0 rc, 1 rr, 2 serializable (P17)
+    reads: Vec<BoilaTxnRead>
 }
 
 fn boila_txn_max_default() -> i64 {
@@ -74,7 +82,8 @@ struct BoilaTxnRes {
 
 fn boila_txn_new() -> BoilaTxn {
     let w: Vec<BoilaTxnWrite> = vec_new()
-    return BoilaTxn { active: 0, read_only: 0, snapshot_lsn: 0, db: "", writes: w, max_writes: boila_txn_max_default() }
+    let r: Vec<BoilaTxnRead> = vec_new()
+    return BoilaTxn { active: 0, read_only: 0, snapshot_lsn: 0, db: "", writes: w, max_writes: boila_txn_max_default(), isol: 0, reads: r }
 }
 
 fn boila_txn_res(s: BoilaStore, txn: BoilaTxn, ok: i64, err: str, state: str, lsn: i64) -> BoilaTxnRes {
@@ -185,20 +194,26 @@ fn boila_txn_del(s: BoilaStore, txn: BoilaTxn, cf: i64, table_id: i64, pk: bytes
 // --- BEGIN / COMMIT / ROLLBACK ---
 
 fn boila_txn_begin(s: BoilaStore, txn: BoilaTxn, read_only: i64, db: str) -> BoilaTxnRes !IO !Time !Par {
+    return boila_txn_begin_isol(s, txn, read_only, db, 0)?
+}
+
+fn boila_txn_begin_isol(s: BoilaStore, txn: BoilaTxn, read_only: i64, db: str, isol: i64) -> BoilaTxnRes !IO !Time !Par {
     if txn.active == 1 {
         return boila_txn_res(s, txn, 0, "вече има активна транзакция", "25001", 0)
     }
     let cur = boila_lsn_current(s)?
     let w: Vec<BoilaTxnWrite> = vec_new()
+    let r: Vec<BoilaTxnRead> = vec_new()
     let maxw = boila_txn_max_from_env()?
-    let t2 = BoilaTxn { active: 1, read_only: read_only, snapshot_lsn: cur.lsn, db: db, writes: w, max_writes: maxw }
+    let t2 = BoilaTxn { active: 1, read_only: read_only, snapshot_lsn: cur.lsn, db: db, writes: w, max_writes: maxw, isol: isol, reads: r }
     let s2 = boila_gc_on_begin(cur.s, cur.lsn)?
     return boila_txn_res(s2, t2, 1, "", "", cur.lsn)
 }
 
 fn boila_txn_rollback(txn: BoilaTxn) -> BoilaTxn {
     let w: Vec<BoilaTxnWrite> = vec_new()
-    return BoilaTxn { active: 0, read_only: 0, snapshot_lsn: 0, db: "", writes: w, max_writes: txn.max_writes }
+    let r: Vec<BoilaTxnRead> = vec_new()
+    return BoilaTxn { active: 0, read_only: 0, snapshot_lsn: 0, db: "", writes: w, max_writes: txn.max_writes, isol: 0, reads: r }
 }
 
 fn boila_txn_rollback_s(s: BoilaStore, txn: BoilaTxn) -> BoilaTxnRes !Par {
@@ -215,6 +230,33 @@ fn boila_txn_commit(s: BoilaStore, txn: BoilaTxn) -> BoilaTxnRes !IO !Time !Par 
     }
     if vec_len(txn.writes) == 0 {
         return boila_txn_rollback_s(s, txn)?
+    }
+    if txn.isol == boila_isol_ser() {
+        let snap = txn.snapshot_lsn
+        let mut ci: i64 = 0
+        while ci < vec_len(txn.reads) {
+            let rd = vec_get(txn.reads, ci)
+            let cg = boila_get(s, boila_cf_data(), rd.table_id, rd.pk)?
+            s = cg.s
+            if cg.found == 0 || boila_unwrap_lsn(cg.val) > snap {
+                let rb = boila_txn_rollback_s(s, txn)?
+                return boila_txn_res(rb.s, rb.txn, 0, "serialization_failure", "40001", 0)
+            }
+            ci = ci + 1
+        }
+        ci = 0
+        while ci < vec_len(txn.writes) {
+            let w = vec_get(txn.writes, ci)
+            if w.cf == boila_cf_data() {
+                let cg = boila_get(s, boila_cf_data(), w.table_id, w.pk)?
+                s = cg.s
+                if cg.found == 1 && boila_unwrap_lsn(cg.val) > snap {
+                    let rb = boila_txn_rollback_s(s, txn)?
+                    return boila_txn_res(rb.s, rb.txn, 0, "serialization_failure", "40001", 0)
+                }
+            }
+            ci = ci + 1
+        }
     }
     // LSN: прочети брояча, запази lsn, запиши lsn+1
     let g = boila_get(s, boila_cf_sys(), 1, boila_lsn_pk())?
@@ -269,7 +311,26 @@ fn boila_txn_get(s: BoilaStore, txn: BoilaTxn, table_id: i64, pk: bytes) -> Boil
         }
         return BoilaTxnGet { s: s, found: 1, row: w.row, lsn: 0 }
     }
-    let g = boila_get(s, boila_cf_data(), table_id, pk)?
+    let mut g = BoilaGet { s: s, found: 0, val: bytes_new(0) }
+    if txn.isol >= boila_isol_rr() {
+        g = boila_get_asof(s, boila_cf_data(), table_id, pk, txn.snapshot_lsn)?
+    } else {
+        g = boila_get(s, boila_cf_data(), table_id, pk)?
+    }
+    if g.found == 1 && txn.isol == boila_isol_ser() {
+        let mut i: i64 = 0
+        let mut seen: i64 = 0
+        while i < vec_len(txn.reads) {
+            let r = vec_get(txn.reads, i)
+            if r.table_id == table_id && bytes_eq_b(r.pk, pk) {
+                seen = 1
+            }
+            i = i + 1
+        }
+        if seen == 0 {
+            vec_push(txn.reads, BoilaTxnRead { table_id: table_id, pk: pk })
+        }
+    }
     if g.found == 0 {
         return BoilaTxnGet { s: g.s, found: 0, row: bytes_new(0), lsn: 0 }
     }

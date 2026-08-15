@@ -36,8 +36,8 @@ the SQL flagship on top of the RocksDB-class engine:
 
 ## Status
 
-Phases **P0–P16** landed (NUMERIC, window, COPY, SCRAM-SHA-256,
-compaction-filter GC). P17–P19 (serializable, FDW, raft) are in
+Phases **P0–P17** landed (NUMERIC, window, COPY, SCRAM, filter-GC,
+serializable). P18–P19 (FDW, raft) are in
 [PLAN.md](PLAN.md). Concurrent HTTP + PG: bounded `BOILA_WORKERS`
 pool (default 4; `=0` → `go_bg` per conn), hop-less per-shard stores,
 shared per-db plan cache. Data SQL is a shared lock; schema DDL is

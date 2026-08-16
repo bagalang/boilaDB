@@ -442,8 +442,12 @@ close the "Not yet" gaps of docs/sql.md one at a time.
   helpers split out to `sql/exec_dual_str.baga` for the line gate).
   **Gate (passed):** `tests/boila_tochar_test` — 8 checks (epoch,
   next-day, HH24:MI:SS, leap-day 29/02/1972, DD/MM/YYYY, dual now()).
-  Residual: no `Mon`/`Month`/`Day` names, no `US`/`TZ` fields, no
-  locale; numeric `to_char` not supported (timestamptz only).
+  **U5b (LANDED):** month/day names + meridiem — `Month Mon MON mon`
+  (English names, PG 9-char blank padding on `Month`/`Day`), `Day DY
+  Dy dy`, `D` (1=Sunday), `AM PM am pm`; token table in
+  `boila_to_char_name_tok`. Residual: no locale (lc_time), no `FM`
+  fill mode, no `TZ` fields; numeric `to_char` not supported
+  (timestamptz only).
 
 With P20-1…P20-5 the dialect covers the general building blocks an
 application schema needs. Concrete applications are separate packages

@@ -230,7 +230,7 @@ projection / dual / WHERE expression spans.
 | `upper` / `lower` / `trim` / `btrim` / `reverse` | text (`upper` is ASCII-only) |
 | `substr` / `substring` / `left` / `right` / `replace` / `repeat` / `lpad` / `rpad` | text |
 | `strpos` / `abs` / `sign` / `mod` / `power` / `pow` | bigint |
-| `to_char(timestamptz, fmt)` | text (P20-5; `YYYY MM DD HH24 HH12 HH MI SS`) |
+| `to_char(timestamptz, fmt)` | text (P20-5; `YYYY MM DD HH24 HH12 HH MI SS Month Mon MON mon Day DY Dy dy D AM PM am pm`) |
 | `starts_with` / `ends_with` | boolean |
 | `coalesce` / `nullif` / `greatest` / `least` / `concat` | first-arg type or text |
 | `quote_literal` / `quote_ident` / `quote_nullable` / `pg_typeof` | text |

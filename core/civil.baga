@@ -2,8 +2,8 @@
 //
 // timestamptz is i64 microseconds since 1970-01-01 UTC. civil_from_days
 // is the Howard Hinnant algorithm (all-integer, no floats). Supported
-// to_char tokens: YYYY MM DD HH24 HH12 HH MI SS; any other text is
-// copied literally (UTF-8 aware).
+// to_char tokens: YYYY MM DD HH24 HH12 HH MI SS Month Mon Day DY Dy dy
+// D AM PM am pm; any other text is copied literally (UTF-8 aware).
 
 import "std/str/str.baga"
 import "std/bytes/bytes.baga"
@@ -86,6 +86,188 @@ fn boila_civ_slice(fb: bytes, i: i64, j: i64) -> str {
     return str_of_bytes(bytes_slice(fb, i, j))
 }
 
+// pad to 9 chars with spaces (PG `Month` / `Day` behavior).
+fn boila_pad9(s: str) -> str {
+    let mut out = s
+    let mut i = len(s)
+    while i < 9 {
+        out = concat(out, " ")
+        i = i + 1
+    }
+    return out
+}
+
+// weekday index 0=Sunday..6=Saturday; epoch day 0 = Thursday.
+fn boila_civil_wday(days: i64) -> i64 {
+    let x = days + 4
+    return x - boila_floor_div(x, 7) * 7
+}
+
+fn boila_mon_abbr(m: i64) -> str {
+    if m == 1 { return "Jan" }
+    if m == 2 { return "Feb" }
+    if m == 3 { return "Mar" }
+    if m == 4 { return "Apr" }
+    if m == 5 { return "May" }
+    if m == 6 { return "Jun" }
+    if m == 7 { return "Jul" }
+    if m == 8 { return "Aug" }
+    if m == 9 { return "Sep" }
+    if m == 10 { return "Oct" }
+    if m == 11 { return "Nov" }
+    return "Dec"
+}
+
+fn boila_mon_abbr_upper(m: i64) -> str {
+    if m == 1 { return "JAN" }
+    if m == 2 { return "FEB" }
+    if m == 3 { return "MAR" }
+    if m == 4 { return "APR" }
+    if m == 5 { return "MAY" }
+    if m == 6 { return "JUN" }
+    if m == 7 { return "JUL" }
+    if m == 8 { return "AUG" }
+    if m == 9 { return "SEP" }
+    if m == 10 { return "OCT" }
+    if m == 11 { return "NOV" }
+    return "DEC"
+}
+
+fn boila_mon_abbr_low(m: i64) -> str {
+    if m == 1 { return "jan" }
+    if m == 2 { return "feb" }
+    if m == 3 { return "mar" }
+    if m == 4 { return "apr" }
+    if m == 5 { return "may" }
+    if m == 6 { return "jun" }
+    if m == 7 { return "jul" }
+    if m == 8 { return "aug" }
+    if m == 9 { return "sep" }
+    if m == 10 { return "oct" }
+    if m == 11 { return "nov" }
+    return "dec"
+}
+
+fn boila_mon_full(m: i64) -> str {
+    if m == 1 { return boila_pad9("January") }
+    if m == 2 { return boila_pad9("February") }
+    if m == 3 { return boila_pad9("March") }
+    if m == 4 { return boila_pad9("April") }
+    if m == 5 { return boila_pad9("May") }
+    if m == 6 { return boila_pad9("June") }
+    if m == 7 { return boila_pad9("July") }
+    if m == 8 { return boila_pad9("August") }
+    if m == 9 { return boila_pad9("September") }
+    if m == 10 { return boila_pad9("October") }
+    if m == 11 { return boila_pad9("November") }
+    return boila_pad9("December")
+}
+
+fn boila_day_abbr(w: i64) -> str {
+    if w == 0 { return "Sun" }
+    if w == 1 { return "Mon" }
+    if w == 2 { return "Tue" }
+    if w == 3 { return "Wed" }
+    if w == 4 { return "Thu" }
+    if w == 5 { return "Fri" }
+    return "Sat"
+}
+
+fn boila_day_abbr_upper(w: i64) -> str {
+    if w == 0 { return "SUN" }
+    if w == 1 { return "MON" }
+    if w == 2 { return "TUE" }
+    if w == 3 { return "WED" }
+    if w == 4 { return "THU" }
+    if w == 5 { return "FRI" }
+    return "SAT"
+}
+
+fn boila_day_abbr_low(w: i64) -> str {
+    if w == 0 { return "sun" }
+    if w == 1 { return "mon" }
+    if w == 2 { return "tue" }
+    if w == 3 { return "wed" }
+    if w == 4 { return "thu" }
+    if w == 5 { return "fri" }
+    return "sat"
+}
+
+fn boila_day_full(w: i64) -> str {
+    if w == 0 { return boila_pad9("Sunday") }
+    if w == 1 { return boila_pad9("Monday") }
+    if w == 2 { return boila_pad9("Tuesday") }
+    if w == 3 { return boila_pad9("Wednesday") }
+    if w == 4 { return boila_pad9("Thursday") }
+    if w == 5 { return boila_pad9("Friday") }
+    return boila_pad9("Saturday")
+}
+
+struct BoilaTokOut {
+    s: str,
+    n: i64
+}
+
+// Name/meridiem tokens (U5): returns consumed bytes; n == 0 → no token.
+fn boila_to_char_name_tok(m: i64, w: i64, hh24: i64, fb: bytes, i: i64) -> BoilaTokOut {
+    let tk5 = boila_civ_slice(fb, i, i + 5)
+    let tk3 = boila_civ_slice(fb, i, i + 3)
+    let tk2 = boila_civ_slice(fb, i, i + 2)
+    let tk1 = boila_civ_slice(fb, i, i + 1)
+    if tk5 == "Month" {
+        return BoilaTokOut { s: boila_mon_full(m), n: 5 }
+    }
+    if tk3 == "Mon" {
+        return BoilaTokOut { s: boila_mon_abbr(m), n: 3 }
+    }
+    if tk3 == "MON" {
+        return BoilaTokOut { s: boila_mon_abbr_upper(m), n: 3 }
+    }
+    if tk3 == "mon" {
+        return BoilaTokOut { s: boila_mon_abbr_low(m), n: 3 }
+    }
+    if tk3 == "Day" {
+        return BoilaTokOut { s: boila_day_full(w), n: 3 }
+    }
+    if tk2 == "DY" {
+        return BoilaTokOut { s: boila_day_abbr_upper(w), n: 2 }
+    }
+    if tk2 == "Dy" {
+        return BoilaTokOut { s: boila_day_abbr(w), n: 2 }
+    }
+    if tk2 == "dy" {
+        return BoilaTokOut { s: boila_day_abbr_low(w), n: 2 }
+    }
+    if tk2 == "AM" {
+        if hh24 >= 12 {
+            return BoilaTokOut { s: "PM", n: 2 }
+        }
+        return BoilaTokOut { s: "AM", n: 2 }
+    }
+    if tk2 == "PM" {
+        if hh24 >= 12 {
+            return BoilaTokOut { s: "PM", n: 2 }
+        }
+        return BoilaTokOut { s: "AM", n: 2 }
+    }
+    if tk2 == "am" {
+        if hh24 >= 12 {
+            return BoilaTokOut { s: "pm", n: 2 }
+        }
+        return BoilaTokOut { s: "am", n: 2 }
+    }
+    if tk2 == "pm" {
+        if hh24 >= 12 {
+            return BoilaTokOut { s: "pm", n: 2 }
+        }
+        return BoilaTokOut { s: "am", n: 2 }
+    }
+    if tk1 == "D" {
+        return BoilaTokOut { s: int_to_str(w + 1), n: 1 }
+    }
+    return BoilaTokOut { s: "", n: 0 }
+}
+
 // to_char(timestamptz us, fmt). Unknown tokens pass through literally.
 fn boila_to_char_ts(us: i64, fmt: str) -> str {
     let day_us: i64 = 86400000000
@@ -96,6 +278,7 @@ fn boila_to_char_ts(us: i64, fmt: str) -> str {
     let hh24 = sec / 3600
     let mi = (sec - (sec / 3600) * 3600) / 60
     let ss = sec - (sec / 60) * 60
+    let w = boila_civil_wday(days)
     let mut hh12 = hh24 - (hh24 / 12) * 12
     if hh12 == 0 {
         hh12 = 12
@@ -140,9 +323,15 @@ fn boila_to_char_ts(us: i64, fmt: str) -> str {
                                         out = concat(out, boila_fmt2(ss))
                                         i = i + 2
                                     } else {
-                                        let cl = boila_utf8_len(bytes_at(fb, i) & 255)
-                                        out = concat(out, boila_civ_slice(fb, i, i + cl))
-                                        i = i + cl
+                                        let nt = boila_to_char_name_tok(civ.m, w, hh24, fb, i)
+                                        if nt.n > 0 {
+                                            out = concat(out, nt.s)
+                                            i = i + nt.n
+                                        } else {
+                                            let cl = boila_utf8_len(bytes_at(fb, i) & 255)
+                                            out = concat(out, boila_civ_slice(fb, i, i + cl))
+                                            i = i + cl
+                                        }
                                     }
                                 }
                             }

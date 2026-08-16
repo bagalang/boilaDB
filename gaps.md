@@ -99,9 +99,12 @@ T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
 - **U5 — (FIXED P20-5) to_char(timestamptz, fmt).** `YYYY MM DD HH24
   HH12 HH MI SS` tokens, literal pass-through (UTF-8 aware); Hinnant
   civil-from-days in `core/civil.baga`. Gate: `tests/boila_tochar_test`
-  8/8 (incl. leap day 29/02/1972, pre-1970-safe). Residual: no
-  month/day names, no AM/PM, no TZ fields; timestamptz only (no numeric
-  to_char).
+  8/8 (incl. leap day 29/02/1972, pre-1970-safe). **U5b (FIXED):**
+  month/day names + meridiem — `Month Mon MON mon` (English, PG 9-char
+  padding for `Month`/`Day`), `Day DY Dy dy`, `D` (1=Sunday), `AM PM
+  am pm`. Gate: `boila_tochar_test` name/meridiem checks (10 new).
+  Residual: no locale (lc_time) / `FM` fill-mode / `TZ` fields; numeric
+  to_char not supported.
 
 ## P12–P19 (в плана, 2026-08-15)
 

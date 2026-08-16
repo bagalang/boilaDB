@@ -246,10 +246,15 @@
   `NUMERIC(p,s)` в първия разрез).
 - `CAST(x AS numeric)` / `x::numeric` от text/bigint; INSERT coerce
   от `'12.50'` / `1250`.
+- **N1a (LANDED):** unquoted decimal literals — `12.50` / `-0.5` са
+  NUMERIC в lexer-а (`tok_dec`); работят в VALUES / UPDATE SET /
+  ON CONFLICT SET / DEFAULT / WHERE / HAVING; dual/projection изрази
+  ги отказват с 0A000; range по NUMERIC PRIMARY KEY → 0A000 (честно,
+  byte-enc не е sort-order). Gate: `tests/boila_declex_test`.
 - PG wire OID **1700**; text формат = `dec_to_string`.
 - **Гейт:** `tests/boila_numeric_test` — create/insert/select/cast/
   restart; `1.0 = 1.00`; кирилица в съседна TEXT колона остава UTF-8.
-- Residual: няма unquoted `12.50` в lexer-а; няма `NUMERIC(p,s)`
+- Residual: няма `NUMERIC(p,s)`
   проверка; secondary index range по NUMERIC е seq (няма sort-order
   encode); `sum`/`avg` по NUMERIC — P12b.
 

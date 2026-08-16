@@ -112,7 +112,12 @@ T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
 
 - **N1 — NUMERIC tag 9, bagadecimal payload.** Unconstrained
   `NUMERIC`/`DECIMAL`; `CAST` / `::numeric`; INSERT coerce от text/bigint.
-  Residual: няма unquoted `12.50` в lexer-а; няма `NUMERIC(p,s)`
+  **N1a (FIXED):** unquoted decimal literals — `12.50` / `-0.5` стават
+  NUMERIC (tag 9) в lexer-а (`tok_dec`), работят в VALUES / UPDATE SET /
+  ON CONFLICT SET / DEFAULT / WHERE / HAVING; в dual/projection изрази
+  остават 0A000 (честно). Range по NUMERIC PRIMARY KEY е честно 0A000
+  (byte-enc не е sort-order — преди беше тихо грешно). Gate:
+  `tests/boila_declex_test` 22/22. Residual: няма `NUMERIC(p,s)`
   проверка; index range по NUMERIC е seq (няма sort-order encode);
   `sum`/`avg` по NUMERIC чака P12b.
 - **N2 — (FIXED P13) Window functions.** `parse_window` + `exec_window`.

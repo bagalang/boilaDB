@@ -6,6 +6,7 @@ import "token.baga"
 import "lexer.baga"
 import "../catalog/ddl_types.baga"
 import "../core/value.baga"
+import "../core/numeric.baga"
 import "std/str/str.baga"
 
 struct BoilaColCon {
@@ -57,6 +58,19 @@ fn boila_parse_col_cons(l: BoilaLex, i0: i64, cname: str, typ: i64) -> BoilaColC
                         flags = flags + boila_cfl_hasdef()
                         i = i + 2
                     } else {
+                        // N1a: unquoted decimal DEFAULT — NUMERIC колони
+                        if dv.kind == tok_dec() {
+                            if typ != boila_v_num() {
+                                return boila_pcc_fail(concat("DEFAULT decimal изисква NUMERIC колона '", concat(cname, "'")), "42804")
+                            }
+                            let np = boila_num_parse(dv.txt)
+                            if np.ok == 0 {
+                                return boila_pcc_fail(concat("DEFAULT — невалидно NUMERIC число '", concat(dv.txt, "'")), "22P02")
+                            }
+                            def = boila_val_num_bytes(boila_num_pack(np.value))
+                            flags = flags + boila_cfl_hasdef()
+                            i = i + 2
+                        } else {
                         if tok_kw(dv, "true") == 1 || tok_kw(dv, "false") == 1 {
                             if typ != boila_v_bool() {
                                 return boila_pcc_fail(concat("DEFAULT true/false не съответства на типа на '", concat(cname, "'")), "42804")
@@ -74,6 +88,7 @@ fn boila_parse_col_cons(l: BoilaLex, i0: i64, cname: str, typ: i64) -> BoilaColC
                             } else {
                                 return boila_pcc_fail("DEFAULT поддържа литерал или now()", "0A000")
                             }
+                        }
                         }
                     }
                 }

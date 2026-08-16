@@ -90,6 +90,10 @@ fn boila_agg_scan(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, sel: BoilaSel) ->
         }
         if sel.hi_col != pkcol.name { pk_range = 0 }
     }
+    // N1a guard: NUMERIC PK няма sort-order кодировка — range е честно 0A000
+    if pk_range == 1 && (sel.has_lo == 1 || sel.has_hi == 1) && pkcol.typ == boila_v_num() {
+        return boila_exec_fail(s, txn, "range по NUMERIC PRIMARY KEY — 0A000 (няма sort-order encode)", "0A000")
+    }
     // eq point / secondary — small results; use materialize path via empty skip
     if sel.has_eq == 1 {
         let f = boila_fetch_rows(s, txn, t, sel)?

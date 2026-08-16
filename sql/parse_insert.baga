@@ -161,7 +161,7 @@ fn boila_parse_insert(l: BoilaLex) -> BoilaParseIns {
                 }
                 let vt = boila_ps_tok(l, i + 2)
                 let mut is_lit: i64 = 0
-                if vt.kind == tok_num() || vt.kind == tok_str() || vt.kind == tok_param() {
+                if vt.kind == tok_num() || vt.kind == tok_dec() || vt.kind == tok_str() || vt.kind == tok_param() {
                     is_lit = 1
                 }
                 if vt.kind == tok_ident() && (tok_kw(vt, "null") == 1 || tok_kw(vt, "true") == 1 || tok_kw(vt, "false") == 1) {

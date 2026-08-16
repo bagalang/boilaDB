@@ -1,0 +1,58 @@
+// parse_lit.baga — литерални помощници (split от parse_common.baga при
+// N1a за 400-редовия gate): токен достъп + literal → BoilaVal.
+
+import "token.baga"
+import "lexer.baga"
+import "../core/value.baga"
+import "../core/numeric.baga"
+
+struct BoilaLit {
+    ok: i64,
+    v: BoilaVal,
+    param: i64,   // 0 = concrete; N = $N (W2)
+    err: str,
+    state: str
+}
+
+fn boila_ps_tok(l: BoilaLex, i: i64) -> Token {
+    if i < vec_len(l.toks) {
+        return vec_get(l.toks, i)
+    }
+    return token_new(tok_eof(), "")
+}
+
+// literal → BoilaVal; ok=0 при не-литерал. $N → ok=1, param=N.
+fn boila_ps_literal(l: BoilaLex, i: i64) -> BoilaLit {
+    let t = boila_ps_tok(l, i)
+    if t.kind == tok_param() {
+        let n = parse_int(t.txt)
+        if n < 1 {
+            return BoilaLit { ok: 0, v: boila_val_null(), param: 0, err: "параметър $N — N≥1", state: "42601" }
+        }
+        return BoilaLit { ok: 1, v: boila_val_param(n), param: n, err: "", state: "" }
+    }
+    if t.kind == tok_num() {
+        return BoilaLit { ok: 1, v: boila_val_i64(parse_int(t.txt)), param: 0, err: "", state: "" }
+    }
+    // N1a: unquoted decimal literal → NUMERIC (tag 9)
+    if t.kind == tok_dec() {
+        let np = boila_num_parse(t.txt)
+        if np.ok == 0 {
+            return BoilaLit { ok: 0, v: boila_val_null(), param: 0, err: concat("невалидно NUMERIC число '", concat(t.txt, "'")), state: "22P02" }
+        }
+        return BoilaLit { ok: 1, v: boila_val_num_bytes(boila_num_pack(np.value)), param: 0, err: "", state: "" }
+    }
+    if t.kind == tok_str() {
+        return BoilaLit { ok: 1, v: boila_val_str(t.txt), param: 0, err: "", state: "" }
+    }
+    if tok_kw(t, "null") == 1 {
+        return BoilaLit { ok: 1, v: boila_val_null(), param: 0, err: "", state: "" }
+    }
+    if tok_kw(t, "true") == 1 {
+        return BoilaLit { ok: 1, v: boila_val_bool(1), param: 0, err: "", state: "" }
+    }
+    if tok_kw(t, "false") == 1 {
+        return BoilaLit { ok: 1, v: boila_val_bool(0), param: 0, err: "", state: "" }
+    }
+    return BoilaLit { ok: 0, v: boila_val_null(), param: 0, err: concat("очаквах литерал, получих '", concat(t.txt, "'")), state: "42601" }
+}

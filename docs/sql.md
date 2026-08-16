@@ -48,7 +48,10 @@ the child rows, SET NULL nulls the child FK column. Cascade is
 single-level (no recursion through chained FKs).
 
 **Not yet:** arrays, usable `FLOAT8` columns, `NUMERIC(p,s)`
-enforcement, unquoted `12.50` literals, `ON UPDATE` FK actions.
+enforcement, `ON UPDATE` FK actions. Unquoted decimal literals
+(`12.50`) are NUMERIC in VALUES / SET / DEFAULT / WHERE / HAVING
+(N1a); dual/projection expressions and NUMERIC-PK ranges refuse them
+with `0A000` (honest, no sort-order encoding).
 
 Every `CREATE TABLE` requires a `PRIMARY KEY`.
 

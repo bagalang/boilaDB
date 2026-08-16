@@ -4,52 +4,10 @@ import "token.baga"
 import "lexer.baga"
 import "ast.baga"
 import "sfn.baga"
+import "parse_lit.baga"
 import "../core/value.baga"
 import "../ts/time_bucket.baga"
 import "std/str/str.baga"
-
-struct BoilaLit {
-    ok: i64,
-    v: BoilaVal,
-    param: i64,   // 0 = concrete; N = $N (W2)
-    err: str,
-    state: str
-}
-
-fn boila_ps_tok(l: BoilaLex, i: i64) -> Token {
-    if i < vec_len(l.toks) {
-        return vec_get(l.toks, i)
-    }
-    return token_new(tok_eof(), "")
-}
-
-// literal → BoilaVal; ok=0 при не-литерал. $N → ok=1, param=N.
-fn boila_ps_literal(l: BoilaLex, i: i64) -> BoilaLit {
-    let t = boila_ps_tok(l, i)
-    if t.kind == tok_param() {
-        let n = parse_int(t.txt)
-        if n < 1 {
-            return BoilaLit { ok: 0, v: boila_val_null(), param: 0, err: "параметър $N — N≥1", state: "42601" }
-        }
-        return BoilaLit { ok: 1, v: boila_val_param(n), param: n, err: "", state: "" }
-    }
-    if t.kind == tok_num() {
-        return BoilaLit { ok: 1, v: boila_val_i64(parse_int(t.txt)), param: 0, err: "", state: "" }
-    }
-    if t.kind == tok_str() {
-        return BoilaLit { ok: 1, v: boila_val_str(t.txt), param: 0, err: "", state: "" }
-    }
-    if tok_kw(t, "null") == 1 {
-        return BoilaLit { ok: 1, v: boila_val_null(), param: 0, err: "", state: "" }
-    }
-    if tok_kw(t, "true") == 1 {
-        return BoilaLit { ok: 1, v: boila_val_bool(1), param: 0, err: "", state: "" }
-    }
-    if tok_kw(t, "false") == 1 {
-        return BoilaLit { ok: 1, v: boila_val_bool(0), param: 0, err: "", state: "" }
-    }
-    return BoilaLit { ok: 0, v: boila_val_null(), param: 0, err: concat("очаквах литерал, получих '", concat(t.txt, "'")), state: "42601" }
-}
 
 // agg име → kind (1 count, 3 sum, 4 avg, 5 min, 6 max); 0 не е agg.
 fn boila_ps_agg_kind(name: str) -> i64 {
@@ -131,7 +89,7 @@ fn boila_ps_item_alias(l: BoilaLex, item: BoilaSelItem, pos: i64) -> BoilaPsItem
 fn boila_ps_item(l: BoilaLex, i: i64) -> BoilaPsItem {
     let t = boila_ps_tok(l, i)
     // Q-expr: literal / paren / unary-op start → dual-expression item
-    if t.kind == tok_num() || t.kind == tok_str() || t.kind == tok_lparen() || t.kind == tok_op() || t.kind == tok_star() {
+    if t.kind == tok_num() || t.kind == tok_str() || t.kind == tok_dec() || t.kind == tok_lparen() || t.kind == tok_op() || t.kind == tok_star() {
         return boila_ps_expr_item(l, i)
     }
     if t.kind != tok_ident() {
@@ -371,7 +329,7 @@ fn boila_ps_expr_item(l: BoilaLex, i: i64) -> BoilaPsItem {
                             if tj.kind == tok_rparen() { depth = depth - 1 }
                             vec_push(xtoks, tj)
                             prev_term = 0
-                            if tj.kind == tok_ident() || tj.kind == tok_num() || tj.kind == tok_str() || tj.kind == tok_rparen() {
+                            if tj.kind == tok_ident() || tj.kind == tok_num() || tj.kind == tok_dec() || tj.kind == tok_str() || tj.kind == tok_rparen() {
                                 prev_term = 1
                             }
                             // operand-expecting keywords keep the expr open

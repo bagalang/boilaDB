@@ -17,7 +17,10 @@ T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
 - **W2 — (FIXED P21-5) window SUM/AVG over NUMERIC.** Per-slot decimal
   accumulator in `exec_window.baga`; emits NUMERIC (OID 1700); AVG over
   peer count. Gate: `tests/boila_winnum_test` + `boila_window_test`.
-  Residual: window MIN/MAX over NUMERIC still i64-only; multi-OVER-spec
+  **W2b (FIXED P21-5b):** window MIN/MAX over NUMERIC — kind 7/8 share
+  the decimal slot (`boila_num_payload_cmp` keeps min/max; NULL rows
+  skipped per PG); output stays NUMERIC. Gate: `boila_winnum_test`
+  min/max + nullskip + i64 no-regression checks. Residual: multi-OVER-spec
   per query still 0A000 (P13 residual).
 - **I1 — (FIXED P21-1) multi-column UNIQUE index.** Entry key encodes
   all indexed values; full column list in an `ixcols` schema-row tail

@@ -106,7 +106,8 @@ fn boila_win_out(kind: i64, acc: i64, cnt: i64) -> BoilaVal {
     return boila_val_i64(acc)
 }
 
-// P21-5: decimal window SUM (kind 4) / AVG (kind 5). nacc empty → NULL.
+// P21-5: decimal window SUM (kind 4) / AVG (kind 5) / MIN (7) / MAX (8).
+// nacc empty → NULL; AVG divides by count, MIN/MAX are the kept payload.
 fn boila_win_out_num(kind: i64, nacc: bytes, cnt: i64) -> BoilaVal {
     if bytes_len(nacc) == 0 {
         return boila_val_null()
@@ -192,10 +193,10 @@ fn boila_win_select(s: BoilaStore, txn: BoilaTxn, cols: Vec<BoilaColDef>, rows: 
                 }
             }
             vec_push(acols, ax)
-            // P21-5: NUMERIC sum/avg keeps the decimal output type
+            // P21-5: NUMERIC sum/avg/min/max keep the decimal output type
             let mut isn: i64 = 0
             let mut ty = boila_v_i64()
-            if (it.win.kind == 4 || it.win.kind == 5) && ax >= 0 && ax < vec_len(cols) {
+            if (it.win.kind == 4 || it.win.kind == 5 || it.win.kind == 7 || it.win.kind == 8) && ax >= 0 && ax < vec_len(cols) {
                 if vec_get(cols, ax).typ == boila_v_num() {
                     isn = 1
                     ty = boila_v_num()
@@ -250,13 +251,25 @@ fn boila_win_select(s: BoilaStore, txn: BoilaTxn, cols: Vec<BoilaColDef>, rows: 
                         let mut v = boila_val_null()
                         if ax >= 0 && ax < vec_len(row) { v = vec_get(row, ax) }
                         else { if knd == 6 { v = boila_val_i64(1) } }
-                        if vec_get(isnum, i) == 1 && (knd == 4 || knd == 5) {
+                        if vec_get(isnum, i) == 1 && (knd == 4 || knd == 5 || knd == 7 || knd == 8) {
                             if v.tag != boila_v_null() {
                                 let cur = vec_get(naccs, i)
                                 if bytes_len(cur) == 0 {
                                     vec_set(naccs, i, v.b)
                                 } else {
-                                    vec_set(naccs, i, boila_num_add_kb(cur, v.b))
+                                    if knd == 7 {
+                                        if boila_num_payload_cmp(v.b, cur) < 0 {
+                                            vec_set(naccs, i, v.b)
+                                        }
+                                    } else {
+                                        if knd == 8 {
+                                            if boila_num_payload_cmp(v.b, cur) > 0 {
+                                                vec_set(naccs, i, v.b)
+                                            }
+                                        } else {
+                                            vec_set(naccs, i, boila_num_add_kb(cur, v.b))
+                                        }
+                                    }
                                 }
                             }
                         } else {
@@ -295,7 +308,7 @@ fn boila_win_select(s: BoilaStore, txn: BoilaTxn, cols: Vec<BoilaColDef>, rows: 
                                 if knd == 3 {
                                     vec_push(out, boila_val_i64(dense))
                                 } else {
-                                    if vec_get(isnum, i) == 1 && (knd == 4 || knd == 5) {
+                                    if vec_get(isnum, i) == 1 && (knd == 4 || knd == 5 || knd == 7 || knd == 8) {
                                         vec_push(out, boila_win_out_num(knd, vec_get(naccs, i), vec_get(cnts, i)))
                                     } else {
                                         vec_push(out, boila_win_out(knd, vec_get(accs, i), vec_get(cnts, i)))

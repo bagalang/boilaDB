@@ -466,7 +466,9 @@ gaps. All sub-phases are application-agnostic.
   frame residual. `SUM(col) OVER (…) / AVG(col) OVER (…)` on a NUMERIC
   column accumulate in a per-slot decimal payload and emit NUMERIC
   (OID 1700); `AVG` divides by the peer count at emit. i64 windows are
-  unchanged. Window `MIN`/`MAX` over NUMERIC remain i64-only (residual).
+  unchanged. Window `MIN`/`MAX` over NUMERIC landed right after
+  (W2b) — same decimal slot, kept via `dec_cmp`, NULL rows skipped
+  (residual closed).
   Files: `sql/exec_window.baga`.
   **Gate (passed):** `tests/boila_winnum_test` — partition SUM/AVG
   decimal-exact + i64 no-regression; `tests/boila_window_test` green.

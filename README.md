@@ -12,7 +12,7 @@ deps and `-I app-product` keep working.
 
 | | |
 |--|--|
-| **Version** | 0.1.0 |
+| **Version** | 0.7 |
 | **License** | [MIT](LICENSE) |
 | **Encoding** | UTF-8 only |
 | **Out of scope** | Geo / GPS (not on the roadmap) |
@@ -42,7 +42,9 @@ application-ready SQL surface — P20: UNIQUE indexes, NOT NULL / DEFAULT,
 SERIAL / BIGSERIAL, decimal SUM/AVG, `to_char`; and P21 schema
 integrity: CHECK constraints, REFERENCES / foreign keys with ON DELETE
 (NO ACTION / RESTRICT / CASCADE / SET NULL), multi-column UNIQUE, plus
-numeric HAVING and window SUM/AVG over NUMERIC. Concurrent HTTP + PG:
+numeric HAVING and window SUM/AVG/MIN/MAX over NUMERIC. v0.7 also ships
+`to_char` month/day names + AM/PM and unquoted NUMERIC literals.
+Concurrent HTTP + PG:
 bounded `BOILA_WORKERS` pool (default 4; `=0` → `go_bg` per conn),
 hop-less per-shard stores, shared per-db plan cache. Data SQL is a
 shared lock; schema DDL is exclusive per database. No TLS (gaps W6).
@@ -64,7 +66,7 @@ Numbers: `bench/boila/results/`. Architecture and phase gates:
 
 | Area | What ships |
 |------|------------|
-| **SQL** | SELECT / INSERT / UPDATE / DELETE, `$1` prepared, JOIN (INNER/LEFT), GROUP BY / HAVING, window (`OVER`), expressions, `CASE`, `CAST`, dual (`SELECT` without FROM); decimal `SUM`/`AVG`/`MIN`/`MAX` + HAVING + window over `NUMERIC`, `to_char` |
+| **SQL** | SELECT / INSERT / UPDATE / DELETE, `$1` prepared, JOIN (INNER/LEFT), GROUP BY / HAVING, window (`OVER`), expressions, `CASE`, `CAST`, dual (`SELECT` without FROM); decimal `SUM`/`AVG`/`MIN`/`MAX` + HAVING + window over `NUMERIC`, unquoted NUMERIC literals (`12.50`), `to_char` (incl. month/day names + AM/PM) |
 | **DDL** | Multi-database (`CREATE`/`DROP`/`USE`), tables (PK required), ALTER add/rename/drop column, indexes (single- & multi-column, `UNIQUE`), `IF [NOT] EXISTS`, `TRUNCATE`, `SHOW` / `DESCRIBE` |
 | **Integrity** | `NOT NULL` / `DEFAULT`, `SERIAL` / `BIGSERIAL`, `CHECK`, `REFERENCES` / foreign keys (`ON DELETE` NO ACTION / RESTRICT / CASCADE / SET NULL), `UNIQUE` (multi-column) |
 | **Txns** | `BEGIN` / `COMMIT` / `ROLLBACK`, session write buffer + LSN, SERIALIZABLE / READ COMMITTED, crash → clean rollback |

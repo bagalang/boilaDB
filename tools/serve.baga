@@ -21,7 +21,7 @@ import "std/str/str.baga"
 import "std/bytes/bytes.baga"
 
 fn boila_version() -> str {
-    return "0.1.0"
+    return "0.7"
 }
 
 fn boila_env_or(name: str, dflt: str) -> str !IO !Par {

@@ -104,4 +104,4 @@ templates; empty directories may remain (no `rmdir` builtin — gaps S4).
 ## Version advertised on the wire
 
 HTTP `/health` and `/metrics` (`boila_build_info`) and PG
-`server_version` report **boilaDB 0.1.0**.
+`server_version` report **boilaDB 0.7**.

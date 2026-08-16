@@ -95,7 +95,7 @@ fn boila_dual_bare_kw(fnm: str, db: str, guc: Map<str, str>, pos: i64) -> BoilaD
 fn boila_dual_call_simple(fnm: str, has_arg: i64, arg: str, db: str, guc: Map<str, str>, pos: i64) -> BoilaDualExpr !Time {
     if fnm == "version" {
         if has_arg == 1 { return boila_dual_fail_ex(pos, "version() без аргументи", "42883") }
-        return boila_dual_ok(boila_val_str("boilaDB 0.1.0 (PostgreSQL 16.0 compatible)"), boila_v_str(), fnm, pos)
+        return boila_dual_ok(boila_val_str("boilaDB 0.7 (PostgreSQL 16.0 compatible)"), boila_v_str(), fnm, pos)
     }
     if fnm == "current_date" {
         if has_arg == 1 { return boila_dual_fail_ex(pos, "current_date без аргументи", "42883") }

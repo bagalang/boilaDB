@@ -34,7 +34,7 @@ default database `boila` (same role as `postgres` in PostgreSQL).
 ```bash
 curl -s localhost:6570/health
 # {"status":"ok","open_databases":1,"max_db":64,"live_conn":0,
-#  "mode":"mt-pool","workers":4,"version":"0.1.0"}
+#  "mode":"mt-pool","workers":4,"version":"0.7"}
 
 curl -s -X POST localhost:6570/sql \
   --data "SELECT 1 AS n, current_database()"
@@ -123,7 +123,7 @@ Empty line or `\q` exits. `USE otherdb` changes the prompt.
 # app-product/boilaDB/sandak.toml
 [package]
 name = "boilaDB"
-version = "0.1.0"
+version = "0.7"
 entry = "tools/serve.baga"
 
 [dependencies]

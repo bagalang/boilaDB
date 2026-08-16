@@ -33,7 +33,7 @@ fn boila_exec_set_ok(s: BoilaStore, txn: BoilaTxn, pc: BoilaPlanCache) -> BoilaS
 }
 
 fn boila_guc_default(nm: str) -> str {
-    if nm == "server_version" { return "16.0 (boilaDB 0.1.0)" }
+    if nm == "server_version" { return "16.0 (boilaDB 0.7)" }
     if nm == "server_encoding" || nm == "client_encoding" { return "UTF8" }
     if nm == "integer_datetimes" { return "on" }
     if nm == "DateStyle" || nm == "datestyle" { return "ISO, MDY" }

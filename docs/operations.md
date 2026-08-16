@@ -67,7 +67,7 @@ rocksbaga.
 ## Health and metrics
 
 `GET /health`, `GET /ready`, `GET /metrics` — [http.md](http.md).
-Wire `server_version` is `boilaDB 0.1.0`.
+Wire `server_version` is `boilaDB 0.7`.
 
 ## Benchmarks
 

@@ -29,7 +29,7 @@ exists. See [security.md](security.md).
   "live_conn": 2,
   "mode": "mt-pool",
   "workers": 4,
-  "version": "0.1.0"
+  "version": "0.7"
 }
 ```
 
@@ -39,7 +39,7 @@ exists. See [security.md](security.md).
 ### `GET /ready`
 
 ```json
-{"status":"ready","live_conn":2,"max_conn":64,"version":"0.1.0"}
+{"status":"ready","live_conn":2,"max_conn":64,"version":"0.7"}
 ```
 
 At the connection cap:

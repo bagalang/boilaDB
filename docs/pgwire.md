@@ -17,7 +17,7 @@ Startup parameters:
 | `database` | Session database (default `boila`) |
 | SSL request | Answered `'N'` — no TLS in v1 |
 
-`ParameterStatus` advertises `server_version=boilaDB 0.1.0`,
+`ParameterStatus` advertises `server_version=boilaDB 0.7`,
 `server_encoding=UTF8`, `client_encoding=UTF8`, `DateStyle`,
 `TimeZone`. Another client encoding → `0A000`.
 

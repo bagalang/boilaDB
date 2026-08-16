@@ -167,14 +167,13 @@ fn boila_agg_fold_end(st: BoilaAggFold, sel: BoilaSel) -> BoilaAggOut !Time {
         vec_push(st.gkeys, bytes_new(0))
         vec_push(st.gaccs, boila_agg_new_acc(st.nitems, empty_row))
     }
-    let brows: Vec<Vec<BoilaVal>> = vec_new()
     let mut res = st.res
     let mut g: i64 = 0
     while g < vec_len(st.gaccs) {
         let acc = vec_get(st.gaccs, g)
         let mut emit = true
         if sel.has_having == 1 {
-            let he = boila_hav_eval(acc, sel, st.hav_slots, st.cols, brows)?
+            let he = boila_hav_eval(acc, sel, st.hav_slots, st.cols)?
             if he.ok == 0 {
                 return boila_agg_out_fail(he.err, he.state)
             }

@@ -11,9 +11,13 @@ T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
   packed decimal literal; `HAVING sum/avg/min/max <op> '12.5'` compares
   via `dec_cmp`; integer literal vs numeric aggregate also compares
   decimally; decimal literal vs integer aggregate → `0A000`. Gate:
-  `tests/boila_numagg_test` (5 HAVING checks). Residual: HAVING on a
-  non-projected numeric aggregate without GROUP BY (the `boila_agg_extra`
-  path) stays i64-only.
+  `tests/boila_numagg_test` (5 HAVING checks). **N2b (FIXED):**
+  non-projected HAVING aggregates (with and without GROUP BY) already
+  go through the synthetic-slot path of `boila_hav_setup` (Q-havx) and
+  compare decimally; the old `boila_agg_extra` fallback was dead code
+  (its row buffer was always empty) and is removed — a missing slot
+  now fails loudly (0A000 internal). Gate: `boila_numagg_test`
+  non-projected sum/max/min + int-literal + decimal-on-i64 checks.
 - **W2 — (FIXED P21-5) window SUM/AVG over NUMERIC.** Per-slot decimal
   accumulator in `exec_window.baga`; emits NUMERIC (OID 1700); AVG over
   peer count. Gate: `tests/boila_winnum_test` + `boila_window_test`.

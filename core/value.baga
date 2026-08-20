@@ -5,8 +5,8 @@
 // кодирани, така че bytes_cmp(enc(a), enc(b)) == семантичното сравнение
 // (ключово за range scans в storage/).
 //
-// tag 9 = NUMERIC (P12) — payload в b; cmp е семантичен (dec_cmp),
-// не byte-ред (като f64 residual).
+// tag 9 = NUMERIC (P12) — payload в b е 16-byte pack; ключът е
+// sort-order (P22-2: 14-byte prefix + pack, 31 bytes with tag).
 //
 // 3VL: сравнение, в което участва null, връща 2 = unknown
 // (NULL = NULL НЕ е true — обратното на barabadb).
@@ -157,6 +157,9 @@ fn boila_val_enc(v: BoilaVal) -> bytes {
     if v.tag == boila_v_i64() || v.tag == boila_v_ts() {
         return bytes_concat(t, boila_enc_i64_ord(v.i))
     }
+    if v.tag == boila_v_num() {
+        return bytes_concat(t, boila_num_key_enc(v.b))
+    }
     return bytes_concat(t, v.b)
 }
 
@@ -185,7 +188,33 @@ fn boila_val_dec(b: bytes) -> BoilaVal {
         return BoilaVal { tag: tag, i: x, b: bytes_new(0) }
     }
     let rest = bytes_slice(b, 1, n)
+    if tag == boila_v_num() {
+        return BoilaVal { tag: tag, i: 0, b: boila_num_key_dec(rest) }
+    }
     return BoilaVal { tag: tag, i: 0, b: rest }
+}
+
+fn boila_val_as_num(v: BoilaVal) -> BoilaVal {
+    if v.tag == boila_v_num() {
+        return v
+    }
+    if v.tag == boila_v_i64() {
+        return boila_val_num_bytes(boila_num_pack(boila_num_from_i64(v.i)))
+    }
+    if v.tag == boila_v_str() {
+        let p = boila_num_parse(str_of_bytes(v.b))
+        if p.ok == 1 {
+            return boila_val_num_bytes(boila_num_pack(p.value))
+        }
+    }
+    return v
+}
+
+fn boila_val_enc_typed(typ: i64, v: BoilaVal) -> bytes {
+    if typ == boila_v_num() {
+        return boila_val_enc(boila_val_as_num(v))
+    }
+    return boila_val_enc(v)
 }
 
 // 3VL compare: -1 / 0 / 1, или 2 = unknown (някоя страна е null).

@@ -89,6 +89,25 @@ fn boila_dml_val_ok(typ: i64, v: BoilaVal) -> i64 {
     return 0
 }
 
+struct BoilaCoerce {
+    ok: i64,
+    err: str,
+    state: str,
+    v: BoilaVal
+}
+
+fn boila_dml_coerce_col(cd: BoilaColDef, v: BoilaVal) -> BoilaCoerce {
+    let c = boila_dml_coerce(cd.typ, v)
+    if c.tag == boila_v_num() && cd.nprec > 0 && c.tag != boila_v_null() && boila_is_param(c) == 0 {
+        let f = boila_num_fit(c.b, cd.nprec, cd.nscale)
+        if f.ok == 0 {
+            return BoilaCoerce { ok: 0, err: f.err, state: f.state, v: c }
+        }
+        return BoilaCoerce { ok: 1, err: "", state: "", v: boila_val_num_bytes(f.b) }
+    }
+    return BoilaCoerce { ok: 1, err: "", state: "", v: c }
+}
+
 fn boila_dml_coerce(typ: i64, v: BoilaVal) -> BoilaVal {
     if boila_is_vec_typ(typ) == 1 && v.tag != boila_v_null() {
         let c = boila_vec_coerce(v, boila_vec_dim_of(typ))

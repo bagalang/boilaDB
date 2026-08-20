@@ -5,6 +5,28 @@ V = value/codec/vector, K = key/scan, S = storage, M = metrics/monitoring,
 H = HTTP/API, Q = SQL (от P1), C = cache/planner, A = агрегати,
 T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
 
+## P22 — serve residuals (opened 2026-08-21)
+
+- **C1 — (FIXED P22-1) COPY FROM in MT pool.** `pgw_copy_in_run`
+  collected CopyData then refused `pack!=0` with 0A000 because
+  `boila_server_copy_from` would hit the dummy seed srv. Apply now
+  goes through `boila_mt_copy_from` (shared data lock + hop-less
+  checkout). COPY TO was already on `boila_mt_exec_guc`. Gate:
+  `tests/boila_copy_test` mt_in / mt_out / mt_rollback. Residual:
+  no binary / `FROM 'file'` / HEADER; HTTP POST has no CopyData
+  channel (STDIN still 42601 without payload).
+- **W6-TLS — TLS 1.3 server.** PG SSLRequest still answers `'N'`.
+  `std/net` has a TLS 1.3 **client** only (`tls_connect`); a server
+  handshake is not in this package.
+- **N6 — (FIXED P22-2) NUMERIC(p,s) + sort-order keys.** DDL
+  `NUMERIC(p[,s])` (p 1..28, s 0..p); INSERT/UPDATE/upsert round
+  half-away-from-zero to s and refuse >p digits (`22003`). Keys are
+  tag + 14-byte sort prefix + 16-byte pack (31 bytes) so PK and
+  secondary range scans work. Gate: `tests/boila_numeric_test` +
+  `boila_declex_test` npk_range. Residual: no `CAST AS numeric(p,s)`;
+  ALTER ADD COLUMN stays unconstrained numeric; 29-digit mantissas
+  drop the extra LSD in the sort prefix.
+
 ## P21 — schema integrity + aggregate completeness (opened 2026-08-15)
 
 - **N2 — (FIXED P21-2) numeric HAVING.** `BoilaHavPred.vnum` carries a
@@ -117,14 +139,13 @@ T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
   ON CONFLICT SET / DEFAULT / WHERE / HAVING; в dual/projection изрази
   остават 0A000 (честно). Range по NUMERIC PRIMARY KEY е честно 0A000
   (byte-enc не е sort-order — преди беше тихо грешно). Gate:
-  `tests/boila_declex_test` 22/22. Residual: няма `NUMERIC(p,s)`
-  проверка; index range по NUMERIC е seq (няма sort-order encode);
-  `sum`/`avg` по NUMERIC чака P12b.
+  `tests/boila_declex_test`. Residual: `NUMERIC(p,s)` + sort-order —
+  P22-2; `sum`/`avg` — P20-4.
 - **N2 — (FIXED P13) Window functions.** `parse_window` + `exec_window`.
   Residual: един OVER spec; няма LAG/LEAD/NTILE/named WINDOW;
   няма frame clause; няма window+GROUP BY.
 - **N3 — (FIXED P14) COPY.** STDIN/STDOUT text+csv; wire CopyIn/Out.
-  Residual: no binary/file/HEADER; COPY FROM MT pool → 0A000.
+  Residual: no binary/file/HEADER. COPY FROM MT pool — P22-1.
 - **N4 — (FIXED P15) SCRAM-SHA-256.** s1 verifier; auto SASL; live
   pgbaga. Residual: no PLUS/TLS/MD5.
 - **N5 — (P16–P19 FIXED) filter-GC / SSI-lite / local FDW / raft

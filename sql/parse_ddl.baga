@@ -226,6 +226,31 @@ fn boila_parse_create(l: BoilaLex) -> BoilaParseCreate {
                     typ = boila_vec_typ(dim)
                     tadv = 5
                 }
+                let mut nprec: i64 = 0
+                let mut nscale: i64 = 0
+                if typ == boila_v_num() && boila_pc_tok(l, i + 2).kind == tok_lparen() {
+                    let pn = boila_pc_tok(l, i + 3)
+                    if pn.kind != tok_num() {
+                        return boila_pc_fail("очаквах p в NUMERIC(p[,s])", "42601")
+                    }
+                    nprec = parse_int(pn.txt)
+                    let mut j = i + 4
+                    if boila_pc_tok(l, j).kind == tok_comma() {
+                        let sn = boila_pc_tok(l, j + 1)
+                        if sn.kind != tok_num() {
+                            return boila_pc_fail("очаквах s в NUMERIC(p,s)", "42601")
+                        }
+                        nscale = parse_int(sn.txt)
+                        j = j + 2
+                    }
+                    if boila_pc_tok(l, j).kind != tok_rparen() {
+                        return boila_pc_fail("очаквах ')' след NUMERIC(p[,s]", "42601")
+                    }
+                    if nprec < 1 || nprec > 28 || nscale < 0 || nscale > nprec {
+                        return boila_pc_fail("NUMERIC(p,s) извън 1..28", "22023")
+                    }
+                    tadv = j + 1 - i
+                }
                 if typ < 0 {
                     return boila_pc_fail(concat("типът '", concat(ct.txt, "' не е в подмножеството")), "0A000")
                 }
@@ -272,7 +297,7 @@ fn boila_parse_create(l: BoilaLex) -> BoilaParseCreate {
                     vec_push(cr.fks, BoilaFk { col_idx: vec_len(cr.cols), parent_table: fkr.parent_table, parent_col: fkr.parent_col, on_delete: fkr.on_delete })
                     i = fkr.pos
                 }
-                vec_push(cr.cols, boila_coldef_c(cn.txt, typ, cc.flags, cc.def))
+                vec_push(cr.cols, boila_col_set_num(boila_coldef_c(cn.txt, typ, cc.flags, cc.def), nprec, nscale))
                 let nx = boila_pc_tok(l, i)
                 if nx.kind == tok_comma() {
                     i = i + 1

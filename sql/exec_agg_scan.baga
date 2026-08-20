@@ -90,9 +90,9 @@ fn boila_agg_scan(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, sel: BoilaSel) ->
         }
         if sel.hi_col != pkcol.name { pk_range = 0 }
     }
-    // N1a guard: NUMERIC PK няма sort-order кодировка — range е честно 0A000
-    if pk_range == 1 && (sel.has_lo == 1 || sel.has_hi == 1) && pkcol.typ == boila_v_num() {
-        return boila_exec_fail(s, txn, "range по NUMERIC PRIMARY KEY — 0A000 (няма sort-order encode)", "0A000")
+    if pk_range == 1 && pkcol.typ == boila_v_num() {
+        if sel.has_lo == 1 { sel.pk_lo = boila_val_as_num(sel.pk_lo) }
+        if sel.has_hi == 1 { sel.pk_hi = boila_val_as_num(sel.pk_hi) }
     }
     // eq point / secondary — small results; use materialize path via empty skip
     if sel.has_eq == 1 {
@@ -174,14 +174,14 @@ fn boila_agg_scan(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, sel: BoilaSel) ->
         let mut ki: i64 = 0
         let mut lo_enc = bytes_new(0)
         if sel.has_lo == 1 {
-            lo_enc = boila_val_enc(sel.pk_lo)
+            lo_enc = boila_val_enc_typed(pkcol.typ, sel.pk_lo)
             ki = boila_pk_lb(pks, lo_enc)
             if sel.lo_excl == 1 && ki < n && boila_bytes_cmp(vec_get(pks, ki), lo_enc) == 0 {
                 ki = ki + 1
             }
         }
         let mut hi_enc = bytes_new(0)
-        if sel.has_hi == 1 { hi_enc = boila_val_enc(sel.pk_hi) }
+        if sel.has_hi == 1 { hi_enc = boila_val_enc_typed(pkcol.typ, sel.pk_hi) }
         while ki < n {
             let ge = boila_budget_gate(bud, ki, 0, 0)?
             if ge != "" {

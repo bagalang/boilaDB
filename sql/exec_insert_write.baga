@@ -53,7 +53,11 @@ fn boila_insert_upsert(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ins: BoilaIn
         if boila_dml_val_ok(cd.typ, v) == 0 {
             return boila_insert_one_fail(s, txn, concat("стойност за '", concat(cd.name, "' не съответства на типа")), "42804")
         }
-        vec_set(new, vec_get(prep.ocix, c), boila_dml_coerce(cd.typ, v))
+        let cv = boila_dml_coerce_col(cd, v)
+        if cv.ok == 0 {
+            return boila_insert_one_fail(s, txn, cv.err, cv.state)
+        }
+        vec_set(new, vec_get(prep.ocix, c), cv.v)
         c = c + 1
     }
     // P20-2: NOT NULL проверка върху новия ред

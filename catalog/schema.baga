@@ -20,6 +20,7 @@ import "../core/row.baga"
 import "ddl_types.baga"
 import "checks.baga"
 import "fks.baga"
+import "numtyp.baga"
 import "ttl.baga"
 import "../txn/mvcc.baga"
 import "std/str/str.baga"
@@ -179,7 +180,7 @@ fn boila_cat_schema_row(t: BoilaTable) -> Vec<BoilaVal> {
         }
         i = i + 1
     }
-    return sch3
+    return boila_numtyp_enc_tail(sch3, t.cols)
 }
 
 // CREATE TABLE catalog writes (boila_cat_create / boila_cat_create_txn)
@@ -196,7 +197,7 @@ fn boila_cat_decode_schema(s: BoilaStore, name: str, id: i64, sch_row: bytes) ->
         return BoilaCatRes { s: s, ok: 0, err: "повреден каталог (id mismatch)", state: "XX000", table: boila_cat_empty_table(), id: 0 }
     }
     let ncols = vec_get(sch, 2).i
-    let cols: Vec<BoilaColDef> = vec_new()
+    let mut cols: Vec<BoilaColDef> = vec_new()
     let mut i: i64 = 3
     let mut c: i64 = 0
     while c < ncols && i + 1 < vec_len(sch) {
@@ -295,6 +296,9 @@ fn boila_cat_decode_schema(s: BoilaStore, name: str, id: i64, sch_row: bytes) ->
                 }
                 k5 = k5 + 1
             }
+            // P22-2 NUMERIC(p,s) tail (absent on pre-P22 rows).
+            let nt = boila_numtyp_dec_tail(sch, i5, cols)
+            cols = nt.cols
         }
     }
     let tg = boila_ttl_get(s, id)?

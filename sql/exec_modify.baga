@@ -134,7 +134,11 @@ fn boila_exec_update(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, upd: BoilaUpd)
                 if boila_dml_val_ok(cd.typ, v) == 0 {
                     return boila_dml_fail(s, txn, 7, concat("стойност за '", concat(cd.name, "' не съответства на типа")), "42804")
                 }
-                vec_set(new, vec_get(six, c), boila_dml_coerce(cd.typ, v))
+                let cv = boila_dml_coerce_col(cd, v)
+                if cv.ok == 0 {
+                    return boila_dml_fail(s, txn, 7, cv.err, cv.state)
+                }
+                vec_set(new, vec_get(six, c), cv.v)
                 c = c + 1
             }
             // P20-2: NOT NULL проверка върху новия ред

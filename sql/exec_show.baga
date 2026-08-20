@@ -82,7 +82,11 @@ fn boila_show_columns(s: BoilaStore, txn: BoilaTxn, pc: BoilaPlanCache, table: s
         let c = vec_get(t.cols, i)
         let row: Vec<BoilaVal> = vec_new()
         vec_push(row, boila_val_str(c.name))
-        vec_push(row, boila_val_str(boila_type_name(c.typ)))
+        let mut tnm = boila_type_name(c.typ)
+        if c.typ == boila_v_num() && c.nprec > 0 {
+            tnm = concat(concat("numeric(", int_to_str(c.nprec)), concat(concat(",", int_to_str(c.nscale)), ")"))
+        }
+        vec_push(row, boila_val_str(tnm))
         // P20-2: NOT NULL tracked per column; PK implies NOT NULL.
         if i == t.pk_idx || (c.flags & boila_cfl_notnull()) == boila_cfl_notnull() {
             vec_push(row, boila_val_str("NO"))
@@ -288,6 +292,9 @@ fn boila_show_create_table(s: BoilaStore, txn: BoilaTxn, pc: BoilaPlanCache, tab
         if i > 0 { ddl = concat(ddl, ", ") }
         let c = vec_get(t.cols, i)
         let mut tnm = boila_type_name(c.typ)
+        if c.typ == boila_v_num() && c.nprec > 0 {
+            tnm = concat(concat("numeric(", int_to_str(c.nprec)), concat(concat(",", int_to_str(c.nscale)), ")"))
+        }
         if (c.flags & boila_cfl_auto()) == boila_cfl_auto() {
             tnm = "bigserial"
         }

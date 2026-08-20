@@ -6,6 +6,8 @@ import "../sql/token.baga"
 import "../sql/parse_copy.baga"
 import "../server/databases.baga"
 import "../server/exec_server.baga"
+import "../txn/mvcc.baga"
+import "serve_mt.baga"
 import "std/bytes/bytes.baga"
 import "std/str/str.baga"
 
@@ -15,6 +17,13 @@ struct BoilaPgCopy {
     sess: BoilaPgSess,
     rr: PgWReader,
     ok: i64
+}
+
+fn pgw_copy_from_apply(pack: i64, srv: BoilaServer, txn: BoilaTxn, db: str, sql: str, data: str) -> BoilaSrvOut !IO !Time !Par {
+    if pack != 0 {
+        return boila_mt_copy_from(pack, txn, db, sql, data)?
+    }
+    return boila_server_copy_from(srv, db, sql, data)?
 }
 
 fn pgw_copy_in_run(fd: i64, pack: i64, srv: BoilaServer, sess: BoilaPgSess, sql: str, rr: PgWReader) -> BoilaPgCopy !IO !Net !Time !Par {
@@ -63,15 +72,10 @@ fn pgw_copy_in_run(fd: i64, pack: i64, srv: BoilaServer, sess: BoilaPgSess, sql:
             }
         }
     }
-    if pack != 0 {
-        let w = pgw_write(fd, bytes_concat(pgw_error("0A000", "COPY FROM в MT pool — residual"), pgw_ready(pgw_tx_status(sess))))?
-        if w != 0 {
-            return BoilaPgCopy { hit: 1, srv: srv, sess: sess, rr: r2, ok: 0 }
-        }
-        return BoilaPgCopy { hit: 1, srv: srv, sess: sess, rr: r2, ok: 1 }
+    let out = pgw_copy_from_apply(pack, srv, sess.txn, sess.db, sql, data)?
+    if pack == 0 {
+        srv = out.srv
     }
-    let out = boila_server_copy_from(srv, sess.db, sql, data)?
-    srv = out.srv
     sess.txn = out.txn
     let mut buf = bytes_new(0)
     if out.ok == 0 {

@@ -28,6 +28,7 @@ fn boila_ix_val_width(tag: i64) -> i64 {
     if tag == boila_v_bool() { return 2 }
     if tag == boila_v_i64() { return 9 }
     if tag == boila_v_ts() { return 9 }
+    if tag == boila_v_num() { return boila_num_key_width() }
     return 0 - 1
 }
 

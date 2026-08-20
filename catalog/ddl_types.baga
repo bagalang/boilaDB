@@ -15,7 +15,9 @@ struct BoilaColDef {
     name: str,
     typ: i64,
     flags: i64,     // P20-2: boila_cfl_* bits
-    def: BoilaVal   // P20-2: DEFAULT value when flags & hasdef
+    def: BoilaVal,  // P20-2: DEFAULT value when flags & hasdef
+    nprec: i64,     // P22-2: NUMERIC(p,s); 0 = unconstrained
+    nscale: i64
 }
 
 // P21-4: one lexed token of a CHECK expression (kind+txt pair kept at
@@ -53,11 +55,15 @@ struct BoilaAlter {
 }
 
 fn boila_coldef(name: str, typ: i64) -> BoilaColDef {
-    return BoilaColDef { name: name, typ: typ, flags: 0, def: boila_val_null() }
+    return BoilaColDef { name: name, typ: typ, flags: 0, def: boila_val_null(), nprec: 0, nscale: 0 }
 }
 
 fn boila_coldef_c(name: str, typ: i64, flags: i64, def: BoilaVal) -> BoilaColDef {
-    return BoilaColDef { name: name, typ: typ, flags: flags, def: def }
+    return BoilaColDef { name: name, typ: typ, flags: flags, def: def, nprec: 0, nscale: 0 }
+}
+
+fn boila_col_set_num(cd: BoilaColDef, p: i64, s: i64) -> BoilaColDef {
+    return BoilaColDef { name: cd.name, typ: cd.typ, flags: cd.flags, def: cd.def, nprec: p, nscale: s }
 }
 
 fn boila_create_empty() -> BoilaCreate {

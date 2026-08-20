@@ -200,9 +200,9 @@ fn boila_fetch_rows(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, sel: BoilaSel) 
         }
         if sel.hi_col != pkcol.name { pk_range = 0 }
     }
-    // N1a guard: NUMERIC PK няма sort-order кодировка — range е честно 0A000
-    if pk_range == 1 && (sel.has_lo == 1 || sel.has_hi == 1) && pkcol.typ == boila_v_num() {
-        return boila_fetch_fail(s, txn, "range по NUMERIC PRIMARY KEY — 0A000 (няма sort-order encode)", "0A000")
+    if pk_range == 1 && pkcol.typ == boila_v_num() {
+        if sel.has_lo == 1 { sel.pk_lo = boila_val_as_num(sel.pk_lo) }
+        if sel.has_hi == 1 { sel.pk_hi = boila_val_as_num(sel.pk_hi) }
     }
     // K6: IS [NOT] NULL → exec_isnull (dispatched from exec_select)
     if sel.has_eq == 1 {
@@ -214,7 +214,7 @@ fn boila_fetch_rows(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, sel: BoilaSel) 
             if boila_pk_lit_ok(pkcol.typ, sel.pk_eq) == 0 {
                 return boila_fetch_fail(s, txn, "литералът в = не съответства на типа на PRIMARY KEY", "42804")
             }
-            let pkenc = boila_val_enc(sel.pk_eq)
+            let pkenc = boila_val_enc_typed(pkcol.typ, sel.pk_eq)
             let g = boila_txn_get(s, txn, t.id, pkenc)?
             if g.found == 1 {
                 boila_fetch_emit(rows, boila_row_dec(g.row), topn, oidxs, odesc)
@@ -260,7 +260,13 @@ fn boila_fetch_rows(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, sel: BoilaSel) 
             let cix = boila_col_idx(t, rc)
             let ixid = boila_ix_by_col_t(t, cix)
             if cix >= 0 && ixid >= 0 {
-                let xr = boila_ix_range(s, t, ixid, sel.has_lo, sel.pk_lo, sel.has_hi, sel.pk_hi, sel.lo_excl, sel.hi_excl)?
+                let mut rlo = sel.pk_lo
+                let mut rhi = sel.pk_hi
+                if vec_get(t.cols, cix).typ == boila_v_num() {
+                    rlo = boila_val_as_num(rlo)
+                    rhi = boila_val_as_num(rhi)
+                }
+                let xr = boila_ix_range(s, t, ixid, sel.has_lo, rlo, sel.has_hi, rhi, sel.lo_excl, sel.hi_excl)?
                 s = xr.s
                 if xr.ok == 0 { return boila_fetch_fail(s, txn, xr.err, xr.state) }
                 if xr.has == 1 {
@@ -296,14 +302,14 @@ fn boila_fetch_rows(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, sel: BoilaSel) 
         let mut ki: i64 = 0
         let mut lo_enc = bytes_new(0)
         if sel.has_lo == 1 {
-            lo_enc = boila_val_enc(sel.pk_lo)
+            lo_enc = boila_val_enc_typed(pkcol.typ, sel.pk_lo)
             ki = boila_pk_lb(pks, lo_enc)
             if sel.lo_excl == 1 && ki < n && boila_bytes_cmp(vec_get(pks, ki), lo_enc) == 0 {
                 ki = ki + 1
             }
         }
         let mut hi_enc = bytes_new(0)
-        if sel.has_hi == 1 { hi_enc = boila_val_enc(sel.pk_hi) }
+        if sel.has_hi == 1 { hi_enc = boila_val_enc_typed(pkcol.typ, sel.pk_hi) }
         while ki < n {
             if need > 0 && vec_len(rows) >= need {
                 ki = n

@@ -254,9 +254,7 @@
 - PG wire OID **1700**; text формат = `dec_to_string`.
 - **Гейт:** `tests/boila_numeric_test` — create/insert/select/cast/
   restart; `1.0 = 1.00`; кирилица в съседна TEXT колона остава UTF-8.
-- Residual: няма `NUMERIC(p,s)`
-  проверка; secondary index range по NUMERIC е seq (няма sort-order
-  encode); `sum`/`avg` по NUMERIC — P12b.
+- Residual: `NUMERIC(p,s)` + sort-order — P22-2; `sum`/`avg` — P12b.
 
 ## P13 — Window функции
 
@@ -285,7 +283,7 @@
   1k IN → COUNT 1000 + OUT 1000; лош ред → `22P04` и COUNT непроменен;
   `FROM 'file'` → `0A000`.
 - Residual: няма binary / `FROM 'file'` / `FREEZE` / HEADER /
-  DELIMITER; COPY FROM в MT pool (`BOILA_WORKERS>0`) → `0A000`.
+  DELIMITER. COPY FROM в MT pool — P22-1.
 
 ## P15 — SCRAM-SHA-256
 
@@ -538,6 +536,30 @@ gaps. All sub-phases are application-agnostic.
   modal sync (fts/hnsw/graph) skipped on cascade; `ON UPDATE` actions
   not supported; parent/child scans are full-table (no index seek);
   self-referencing FKs untested.
+
+## P22 — Serve residuals
+
+Goal: close the leftovers that block running the documented default
+server (`BOILA_WORKERS=4`) as a real peer. TLS stays blocked on a
+TLS 1.3 **server** in `std/net` (today only the client exists).
+
+- **P22-1 — COPY FROM in the MT pool (LANDED).** Wire CopyData is
+  collected on the connection as before; apply goes through
+  `boila_mt_copy_from` (shared data lock + hop-less checkout), not
+  the dummy seed `srv`. COPY TO already used `boila_mt_exec_guc`.
+  Files: `api/serve_mt.baga`, `api/pgwire_copy.baga`.
+  **Gate (passed):** `tests/boila_copy_test` MT pack IN/OUT +
+  22P04 rollback.
+- **P22-2 — NUMERIC(p,s) + sort-order keys (LANDED).**
+  `NUMERIC(p)` / `NUMERIC(p,s)` (p 1..28, s 0..p). DML rounds
+  half-away-from-zero to scale s; more than p significant digits →
+  `22003`. Key encoding is 14-byte sort prefix + 16-byte pack so
+  PK/index range uses `bytes_cmp`. Unconstrained `NUMERIC` unchanged.
+  Files: `catalog/numtyp.baga`, `catalog/ddl_types.baga`,
+  `core/numeric.baga`, `core/value.baga`, `sql/parse_ddl.baga`.
+  **Gate (passed):** `tests/boila_numeric_test` (round 12.345→12.35,
+  overflow 22003, SHOW CREATE, ix range, sort-order goldens);
+  `tests/boila_declex_test` NUMERIC PK range.
 
 ## Рискове
 - **`go/chan` само `i64`** → комуникация с shard нишките през канали +

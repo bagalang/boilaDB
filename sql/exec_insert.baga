@@ -144,7 +144,11 @@ fn boila_insert_one(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ins: BoilaIns, 
         if boila_dml_val_ok(cd.typ, v) == 0 {
             return boila_insert_one_fail(s, txn, concat("стойност за '", concat(cd.name, "' не съответства на типа")), "42804")
         }
-        vec_set(full, vec_get(prep.cix, c), boila_dml_coerce(cd.typ, v))
+        let cv = boila_dml_coerce_col(cd, v)
+        if cv.ok == 0 {
+            return boila_insert_one_fail(s, txn, cv.err, cv.state)
+        }
+        vec_set(full, vec_get(prep.cix, c), cv.v)
         c = c + 1
     }
     // P20-2: DEFAULT-и за пропуснатите колони, после NOT NULL проверка
@@ -165,7 +169,11 @@ fn boila_insert_one(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ins: BoilaIns, 
                     vec_set(full, c, boila_val_ts(time_now_ms()? * 1000))
                 } else {
                     if (cd.flags & boila_cfl_hasdef()) == boila_cfl_hasdef() {
-                        vec_set(full, c, boila_dml_coerce(cd.typ, cd.def))
+                        let cv = boila_dml_coerce_col(cd, cd.def)
+                        if cv.ok == 0 {
+                            return boila_insert_one_fail(s, txn, cv.err, cv.state)
+                        }
+                        vec_set(full, c, cv.v)
                     }
                 }
             }

@@ -214,7 +214,7 @@ fn boila_http_conn(ctx: i64) -> i64 !IO !Net !Time !Par {
     return 0
 }
 
-fn boila_pool_handle(fd: i64, pack: i64) -> i64 !IO !Net !Time !Par {
+fn boila_pool_handle(fd: i64, pack: i64) -> i64 !IO !Net !Time !Par !Random {
     return boila_http_conn(cell2(fd, pack))?
 }
 

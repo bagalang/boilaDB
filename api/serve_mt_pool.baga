@@ -2,14 +2,14 @@
 // Accept loop submits fds; N long-lived workers pull and handle.
 //
 // Embedding program must define:
-//   fn boila_pool_handle(fd: i64, pack: i64) -> i64 !IO !Net !Time !Par
+//   fn boila_pool_handle(fd: i64, pack: i64) -> i64 !IO !Net !Time !Par !Random
 //
 // Env: BOILA_WORKERS (default 4, cap 64). 0 = go_bg per conn (old path).
 
 import "std/os/os.baga"
 import "std/str/str.baga"
 
-fn boila_pool_handle(fd: i64, pack: i64) -> i64 !IO !Net !Time !Par
+fn boila_pool_handle(fd: i64, pack: i64) -> i64 !IO !Net !Time !Par !Random
 
 fn boila_workers_n() -> i64 !IO {
     let raw = env("BOILA_WORKERS")

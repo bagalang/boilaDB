@@ -41,7 +41,7 @@ fn boila_pool_handle(fd: i64, pack: i64) -> i64 !IO !Net !Time !Par !Random {
     return boila_pg_conn_mt(cell2(fd, pack))?
 }
 
-fn main() -> i64 !Net !IO !Time !Par {
+fn main() -> i64 !Net !IO !Time !Par !Random {
     let root = boila_env_or("BOILA_PATH", "/tmp/baga_boila")
     let port = parse_int(boila_env_or("BOILA_PGPORT", "6575"))
     let nshards = parse_int(boila_env_or("BOILA_SHARDS", "4"))

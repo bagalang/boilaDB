@@ -22,7 +22,7 @@ fn boila_env_or(name: str, dflt: str) -> str !IO !Par {
     return v
 }
 
-fn boila_pg_conn_mt(ctx: i64) -> i64 !IO !Net !Time !Par {
+fn boila_pg_conn_mt(ctx: i64) -> i64 !IO !Net !Time !Par !Random {
     let fd = cell2_0(ctx)
     let pack = cell2_1(ctx)
     let names: Vec<str> = vec_new()
@@ -37,7 +37,7 @@ fn boila_pg_conn_mt(ctx: i64) -> i64 !IO !Net !Time !Par {
     return 0
 }
 
-fn boila_pool_handle(fd: i64, pack: i64) -> i64 !IO !Net !Time !Par {
+fn boila_pool_handle(fd: i64, pack: i64) -> i64 !IO !Net !Time !Par !Random {
     return boila_pg_conn_mt(cell2(fd, pack))?
 }
 

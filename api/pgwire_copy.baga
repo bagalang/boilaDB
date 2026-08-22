@@ -26,7 +26,7 @@ fn pgw_copy_from_apply(pack: i64, srv: BoilaServer, txn: BoilaTxn, db: str, sql:
     return boila_server_copy_from(srv, db, sql, data)?
 }
 
-fn pgw_copy_in_run(fd: i64, pack: i64, srv: BoilaServer, sess: BoilaPgSess, sql: str, rr: PgWReader) -> BoilaPgCopy !IO !Net !Time !Par {
+fn pgw_copy_in_run(pack: i64, srv: BoilaServer, sess: BoilaPgSess, sql: str, rr: PgWReader) -> BoilaPgCopy !IO !Net !Time !Par {
     let lx = boila_lex(sql)
     if lx.err != "" || tok_kw(vec_get(lx.toks, 0), "copy") != 1 {
         return BoilaPgCopy { hit: 0, srv: srv, sess: sess, rr: rr, ok: 1 }
@@ -36,9 +36,11 @@ fn pgw_copy_in_run(fd: i64, pack: i64, srv: BoilaServer, sess: BoilaPgSess, sql:
         return BoilaPgCopy { hit: 0, srv: srv, sess: sess, rr: rr, ok: 1 }
     }
     let natts = vec_len(p.cp.cols)
-    let w0 = pgw_write(fd, pgw_copy_resp(71, natts))?
-    if w0 != 0 {
-        return BoilaPgCopy { hit: 1, srv: srv, sess: sess, rr: rr, ok: 0 }
+    let mut sp = sess
+    let w0 = pgw_write(sp, pgw_copy_resp(71, natts))?
+    sp = w0.sp
+    if w0.ok != 0 {
+        return BoilaPgCopy { hit: 1, srv: srv, sess: sp, rr: rr, ok: 0 }
     }
     let mut data = ""
     let mut done = 0
@@ -57,36 +59,39 @@ fn pgw_copy_in_run(fd: i64, pack: i64, srv: BoilaServer, sess: BoilaPgSess, sql:
             } else {
                 if m.typ == 102 {
                     let msg = pgw_cstr_read(m.body, 0)
-                    let w = pgw_write(fd, bytes_concat(pgw_error("57014", msg.s), pgw_ready(pgw_tx_status(sess))))?
-                    if w != 0 {
-                        return BoilaPgCopy { hit: 1, srv: srv, sess: sess, rr: r2, ok: 0 }
+                    let w = pgw_write(sp, bytes_concat(pgw_error("57014", msg.s), pgw_ready(pgw_tx_status(sp))))?
+                    sp = w.sp
+                    if w.ok != 0 {
+                        return BoilaPgCopy { hit: 1, srv: srv, sess: sp, rr: r2, ok: 0 }
                     }
-                    return BoilaPgCopy { hit: 1, srv: srv, sess: sess, rr: r2, ok: 1 }
+                    return BoilaPgCopy { hit: 1, srv: srv, sess: sp, rr: r2, ok: 1 }
                 } else {
-                    let w = pgw_write(fd, bytes_concat(pgw_error("08P01", "очаквах CopyData/CopyDone"), pgw_ready(pgw_tx_status(sess))))?
-                    if w != 0 {
-                        return BoilaPgCopy { hit: 1, srv: srv, sess: sess, rr: r2, ok: 0 }
+                    let w = pgw_write(sp, bytes_concat(pgw_error("08P01", "очаквах CopyData/CopyDone"), pgw_ready(pgw_tx_status(sp))))?
+                    sp = w.sp
+                    if w.ok != 0 {
+                        return BoilaPgCopy { hit: 1, srv: srv, sess: sp, rr: r2, ok: 0 }
                     }
-                    return BoilaPgCopy { hit: 1, srv: srv, sess: sess, rr: r2, ok: 1 }
+                    return BoilaPgCopy { hit: 1, srv: srv, sess: sp, rr: r2, ok: 1 }
                 }
             }
         }
     }
-    let out = pgw_copy_from_apply(pack, srv, sess.txn, sess.db, sql, data)?
+    let out = pgw_copy_from_apply(pack, srv, sp.txn, sp.db, sql, data)?
     if pack == 0 {
         srv = out.srv
     }
-    sess.txn = out.txn
+    sp.txn = out.txn
     let mut buf = bytes_new(0)
     if out.ok == 0 {
         buf = pgw_error(out.state, out.err)
     } else {
         buf = pgw_command_complete(concat("COPY ", int_to_str(out.id)))
     }
-    buf = bytes_concat(buf, pgw_ready(pgw_tx_status(sess)))
-    let w = pgw_write(fd, buf)?
-    if w != 0 {
-        return BoilaPgCopy { hit: 1, srv: srv, sess: sess, rr: r2, ok: 0 }
+    buf = bytes_concat(buf, pgw_ready(pgw_tx_status(sp)))
+    let w = pgw_write(sp, buf)?
+    sp = w.sp
+    if w.ok != 0 {
+        return BoilaPgCopy { hit: 1, srv: srv, sess: sp, rr: r2, ok: 0 }
     }
-    return BoilaPgCopy { hit: 1, srv: srv, sess: sess, rr: r2, ok: 1 }
+    return BoilaPgCopy { hit: 1, srv: srv, sess: sp, rr: r2, ok: 1 }
 }

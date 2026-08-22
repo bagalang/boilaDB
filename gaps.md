@@ -15,9 +15,18 @@ T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
   `tests/boila_copy_test` mt_in / mt_out / mt_rollback. Residual:
   no binary / `FROM 'file'` / HEADER; HTTP POST has no CopyData
   channel (STDIN still 42601 without payload).
-- **W6-TLS — TLS 1.3 server.** PG SSLRequest still answers `'N'`.
-  `std/net` has a TLS 1.3 **client** only (`tls_connect`); a server
-  handshake is not in this package.
+- **W6-TLS — (FIXED P22-3) TLS 1.3 on the PG wire.** SSLRequest is
+  answered `'S'` when `BOILA_TLS_CERT`/`BOILA_TLS_KEY` (PEM paths) are
+  set; the connection upgrades to TLS 1.3 via `std/net/tls_server.baga`
+  (`tls_accept` — x25519, suites 4865/4866, RSA-PSS / ECDSA-P256 cert
+  keys). Otherwise `'N'` (unchanged). Writes thread through
+  `BoilaPgSess.tls/tconn`, reads through `PgWReader.tls/tconn`, so the
+  query loop / COPY / SCRAM / MT pool are untouched. `pgbaga` asks with
+  SSLRequest when `PGSSLMODE=require|prefer` (`require` refuses `'N'`);
+  unset = historical plaintext. Gate: `tests/boila_ssl_test`. Residual:
+  single leaf cert (no chain), no session tickets / HRR / client auth,
+  alerts pre-flight only; client validates self-signed leaves only
+  (empty trust anchor).
 - **N6 — (FIXED P22-2) NUMERIC(p,s) + sort-order keys.** DDL
   `NUMERIC(p[,s])` (p 1..28, s 0..p); INSERT/UPDATE/upsert round
   half-away-from-zero to s and refuse >p digits (`22003`). Keys are

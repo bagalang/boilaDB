@@ -540,8 +540,8 @@ gaps. All sub-phases are application-agnostic.
 ## P22 — Serve residuals
 
 Goal: close the leftovers that block running the documented default
-server (`BOILA_WORKERS=4`) as a real peer. TLS stays blocked on a
-TLS 1.3 **server** in `std/net` (today only the client exists).
+server (`BOILA_WORKERS=4`) as a real peer. TLS landed in P22-3 on the
+new `std/net` TLS 1.3 **server** handshake (`tls_accept`).
 
 - **P22-1 — COPY FROM in the MT pool (LANDED).** Wire CopyData is
   collected on the connection as before; apply goes through
@@ -560,6 +560,28 @@ TLS 1.3 **server** in `std/net` (today only the client exists).
   **Gate (passed):** `tests/boila_numeric_test` (round 12.345→12.35,
   overflow 22003, SHOW CREATE, ix range, sort-order goldens);
   `tests/boila_declex_test` NUMERIC PK range.
+- **P22-3 — SSL on the PG wire (LANDED).** SSLRequest is answered
+  `'S'` when `BOILA_TLS_CERT` / `BOILA_TLS_KEY` (PEM paths) are set,
+  then the connection upgrades to TLS 1.3 via the new
+  `std/net/tls_server.baga` (`tls_accept`); otherwise it stays `'N'`.
+  Transport split: writes thread through `BoilaPgSess.tls/tconn`
+  (`pgw_write`/`pgw_write_a`), reads through `PgWReader.tls/tconn`
+  (`pgw_fill`); the query loop, COPY, SCRAM auth and the MT pool are
+  transport-agnostic on top. Client: `pgbaga` sends SSLRequest when
+  `PGSSLMODE=require|prefer` (`require` refuses an `'N'` answer);
+  unset keeps the historical plaintext path (real PostgreSQL stays
+  plaintext — the minimal client validates self-signed leaves only).
+  Honest limits (server): x25519 only; suites 4865/4866; single leaf
+  cert (no chain); no session tickets / HRR / client auth; alerts only
+  before the encrypted flight. Files: `api/pgwire.baga`,
+  `api/pgwire_serve.baga`, `api/pgwire_auth.baga`, `api/pgwire_msg.baga`,
+  `api/pgwire_copy.baga`, `api/serve_mt_pool.baga`, `tools/serve_pg.baga`;
+  client in `pgbaga/conn/{pg,pg_connect,pg_auth,pg_params}.baga`.
+  **Gate (passed):** `tests/boila_ssl_test` — end-to-end TLS 1.3 +
+  simple and extended protocol over the encrypted transport
+  (`run_tests.sh`, openssl-provisioned cert); plaintext regressions
+  `tests/boila_scram_test` ('N' fallback) and `tests/api_test`
+  (real PostgreSQL, no `PGSSLMODE`).
 
 ## Рискове
 - **`go/chan` само `i64`** → комуникация с shard нишките през канали +

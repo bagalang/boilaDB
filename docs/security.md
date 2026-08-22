@@ -91,15 +91,23 @@ user’s hash is `s1:`, else cleartext). SCRAM is AuthenticationSASL
 Failure: `28P01`. `BOILA_TOKEN` still works as cleartext or as an
 ephemeral SCRAM password when no matching user exists.
 
-`sslmode=disable`. An SSLRequest is answered `'N'`.
+TLS 1.3 is opt-in: set `BOILA_TLS_CERT` / `BOILA_TLS_KEY` (PEM paths)
+and an SSLRequest is answered `'S'`, upgrading the connection via the
+`std/net` TLS 1.3 server (`tls_accept`: x25519, AES-128/256-GCM, cert
+key RSA-PSS or ECDSA-P256). Unset → answered `'N'` (plaintext), which
+is also what real-Postgres-facing clients get unless they set
+`PGSSLMODE=require|prefer`. Auth still runs inside the encrypted
+channel when TLS is on.
 
 ## What this is not
 
-- No TLS, no cert auth, no SCRAM channel binding (`-PLUS`).
+- No cert chain validation on the server (single leaf), no client-cert
+  auth, no SCRAM channel binding (`-PLUS`).
 - No row-level security, no column grants.
 - No audit log.
 - No WebSocket (removed from the surface on purpose).
-- Passwords cross the wire in the clear.
+- Without `BOILA_TLS_CERT`/`BOILA_TLS_KEY`, passwords cross the wire
+  in the clear.
 
 Treat `BOILA_TOKEN` like a root password. Rotate by restarting with a
 new value and `ALTER USER … PASSWORD`.

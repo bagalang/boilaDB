@@ -15,7 +15,7 @@ Startup parameters:
 |-------|---------|
 | `user` | Login role (`boila` if empty) |
 | `database` | Session database (default `boila`) |
-| SSL request | Answered `'N'` — no TLS in v1 |
+| SSL request | `'S'` when `BOILA_TLS_CERT`/`BOILA_TLS_KEY` are set (TLS 1.3), else `'N'` |
 
 `ParameterStatus` advertises `server_version=boilaDB 0.7`,
 `server_encoding=UTF8`, `client_encoding=UTF8`, `DateStyle`,
@@ -34,7 +34,8 @@ See [security.md](security.md). Summary:
   either a catalog user’s password or the shared `BOILA_TOKEN`
   (token → superuser).
 - Failure → `28P01`. SCRAM-SHA-256 when the user is `s1:` or
-  `BOILA_AUTH=scram`. Cleartext `p` then → `28000`. No MD5, no TLS.
+  `BOILA_AUTH=scram`. Cleartext `p` then → `28000`. No MD5. TLS 1.3
+  when `BOILA_TLS_CERT`/`BOILA_TLS_KEY` are set (SSLRequest → `'S'`).
 
 ## What the server implements
 
@@ -126,7 +127,8 @@ SQLSTATE, rollback).
 
 Honest list so drivers do not guess:
 
-- No TLS. SCRAM-SHA-256 is P15.
+- TLS 1.3 is opt-in (`BOILA_TLS_CERT`/`BOILA_TLS_KEY`; P22-3) — no
+  session tickets, no client certs. SCRAM-SHA-256 is P15.
 - COPY IN/OUT (P14). No `LISTEN`/`NOTIFY`, no replication.
 - Window functions: P13 (`ROW_NUMBER`/`RANK`/`SUM` `OVER …`).
 - No `"Quoted"` identifiers — bare names only.

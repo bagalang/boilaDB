@@ -13,6 +13,7 @@ import "../txn/mvcc.baga"
 import "serve_mt.baga"
 import "../core/value.baga"
 import "std/net/tcp.baga"
+import "std/net/tls_conn.baga"
 import "std/os/os.baga"
 import "std/str/str.baga"
 import "std/bytes/bytes.baga"
@@ -31,7 +32,12 @@ struct BoilaPgSess {
     e_sel: BoilaSel,
     e_ins: BoilaIns,
     e_upd: BoilaUpd,
-    e_del: BoilaDel
+    e_del: BoilaDel,
+    // Транспорт: след SSLRequest→'S' писането минава през TLS (tconn),
+    // иначе — през суровия fd. Четене: виж PgWReader.tls.
+    fd: i64,
+    tls: i64,
+    tconn: TlsConn
 }
 fn boila_pg_sess_new(db: str) -> BoilaPgSess {
     let sm: Map<str, BoilaPgStmt> = map_new()
@@ -39,7 +45,8 @@ fn boila_pg_sess_new(db: str) -> BoilaPgSess {
     let guc: Map<str, str> = map_new()
     return BoilaPgSess { stmts: sm, portals: pm, db: db, txn: boila_txn_new(), guc: guc,
         e_sel: boila_sel_empty(), e_ins: boila_ins_empty(),
-        e_upd: boila_upd_empty(), e_del: boila_del_empty() }
+        e_upd: boila_upd_empty(), e_del: boila_del_empty(),
+        fd: 0 - 1, tls: 0, tconn: tls_conn_bad("") }
 }
 struct BoilaPgOut {
     srv: BoilaServer,
@@ -48,8 +55,26 @@ struct BoilaPgOut {
     sql_err: i64,
     err: str
 }
-fn pgw_write(fd: i64, b: bytes) -> i64 !Net !IO !Par { return tcp_write_bytes(fd, b)? }
-fn pgw_send_startup_tail(fd: i64, tx: i64) -> i64 !Net !IO !Par {
+// Write result: threaded session (TLS seq advances) + 0/non-0 status.
+struct BoilaPgW {
+    sp: BoilaPgSess,
+    ok: i64
+}
+fn pgw_write(sp: BoilaPgSess, b: bytes) -> BoilaPgW !Net !IO !Par {
+    if sp.tls == 1 {
+        let c2 = tls_conn_write(sp.tconn, b)?
+        let mut sp2 = sp
+        sp2.tconn = c2
+        // 0 = успех (конвенцията на tcp_write_bytes); TlsConn.ok е 1/0
+        if c2.ok == 1 {
+            return BoilaPgW { sp: sp2, ok: 0 }
+        }
+        return BoilaPgW { sp: sp2, ok: 0 - 1 }
+    }
+    let w = tcp_write_bytes(sp.fd, b)?
+    return BoilaPgW { sp: sp, ok: w }
+}
+fn pgw_send_startup_tail(sp: BoilaPgSess, tx: i64) -> BoilaPgW !Net !IO !Par {
     let mut out = pgw_param_status("server_version", "16.0 (boilaDB 0.7)")
     out = bytes_concat(out, pgw_param_status("server_encoding", "UTF8"))
     out = bytes_concat(out, pgw_param_status("client_encoding", "UTF8"))
@@ -63,7 +88,7 @@ fn pgw_send_startup_tail(fd: i64, tx: i64) -> i64 !Net !IO !Par {
     bk = bytes_concat(bk, pgw_be32(0))
     out = bytes_concat(out, pgw_msg(75, bk))
     out = bytes_concat(out, pgw_ready(tx))
-    return pgw_write(fd, out)
+    return pgw_write(sp, out)?
 }
 fn pgw_tx_status(sess: BoilaPgSess) -> i64 {
     if sess.txn.active == 1 { return 84 }
@@ -82,15 +107,16 @@ fn pgw_exec_sel_locked(pack: i64, srv: BoilaServer, txn: BoilaTxn, db: str, sel:
     if pack == 0 { return boila_server_exec_sel(srv, txn, db, sel)? }
     return boila_mt_exec_sel(pack, txn, db, sel)?
 }
-fn pgw_write_out(fd: i64, srv: BoilaServer, sess: BoilaPgSess, out: BoilaSrvOut, send_ready: i64) -> BoilaPgOut !IO !Net !Time !Par {
+fn pgw_write_out(srv: BoilaServer, sess: BoilaPgSess, out: BoilaSrvOut, send_ready: i64) -> BoilaPgOut !IO !Net !Time !Par {
     let mut srv2 = out.srv
     let mut sess2 = sess
     sess2.txn = out.txn
     if out.ok == 0 {
         let mut buf = pgw_error(out.state, out.err)
         if send_ready == 1 { buf = bytes_concat(buf, pgw_ready(pgw_tx_status(sess2))) }
-        let w = pgw_write(fd, buf)?
-        if w != 0 { return BoilaPgOut { srv: srv2, sess: sess2, ok: 0, sql_err: 1, err: "write error" } }
+        let w = pgw_write(sess2, buf)?
+        sess2 = w.sp
+        if w.ok != 0 { return BoilaPgOut { srv: srv2, sess: sess2, ok: 0, sql_err: 1, err: "write error" } }
         return BoilaPgOut { srv: srv2, sess: sess2, ok: 1, sql_err: 1, err: "" }
     }
     let mut buf = bytes_new(0)
@@ -109,8 +135,9 @@ fn pgw_write_out(fd: i64, srv: BoilaServer, sess: BoilaPgSess, out: BoilaSrvOut,
         buf = bytes_concat(buf, pgw_copy_done_msg())
         buf = bytes_concat(buf, pgw_command_complete(pgw_tag(out.kind, out.id, vec_len(out.res.rows))))
         if send_ready == 1 { buf = bytes_concat(buf, pgw_ready(pgw_tx_status(sess2))) }
-        let w = pgw_write(fd, buf)?
-        if w != 0 { return BoilaPgOut { srv: srv2, sess: sess2, ok: 0, sql_err: 0, err: "write error" } }
+        let w = pgw_write(sess2, buf)?
+        sess2 = w.sp
+        if w.ok != 0 { return BoilaPgOut { srv: srv2, sess: sess2, ok: 0, sql_err: 0, err: "write error" } }
         return BoilaPgOut { srv: srv2, sess: sess2, ok: 1, sql_err: 0, err: "" }
     }
     if out.kind == 1 || vec_len(out.res.rows) > 0 {
@@ -123,8 +150,9 @@ fn pgw_write_out(fd: i64, srv: BoilaServer, sess: BoilaPgSess, out: BoilaSrvOut,
     }
     buf = bytes_concat(buf, pgw_command_complete(pgw_tag(out.kind, out.id, vec_len(out.res.rows))))
     if send_ready == 1 { buf = bytes_concat(buf, pgw_ready(pgw_tx_status(sess2))) }
-    let w = pgw_write(fd, buf)?
-    if w != 0 { return BoilaPgOut { srv: srv2, sess: sess2, ok: 0, sql_err: 0, err: "write error" } }
+    let w = pgw_write(sess2, buf)?
+    sess2 = w.sp
+    if w.ok != 0 { return BoilaPgOut { srv: srv2, sess: sess2, ok: 0, sql_err: 0, err: "write error" } }
     return BoilaPgOut { srv: srv2, sess: sess2, ok: 1, sql_err: 0, err: "" }
 }
 fn pgw_note_pg(pack: i64) -> i64 !Par {
@@ -132,7 +160,7 @@ fn pgw_note_pg(pack: i64) -> i64 !Par {
     return 0
 }
 // W7b: per-conn GUC; DISCARD ALL drops prep state.
-fn pgw_run_sql(fd: i64, pack: i64, srv: BoilaServer, sess: BoilaPgSess, sql: str, send_ready: i64) -> BoilaPgOut !IO !Net !Time !Par {
+fn pgw_run_sql(pack: i64, srv: BoilaServer, sess: BoilaPgSess, sql: str, send_ready: i64) -> BoilaPgOut !IO !Net !Time !Par {
     pgw_note_pg(pack)?
     let gh = pgw_try_sess_guc(srv, sess.txn, sess.db, sess.guc, sql)
     if gh.hit == 1 {
@@ -144,70 +172,70 @@ fn pgw_run_sql(fd: i64, pack: i64, srv: BoilaServer, sess: BoilaPgSess, sql: str
             sess.portals = map_new()
             mem_persist_end()
         }
-        return pgw_write_out(fd, srv, sess, gh.out, send_ready)?
+        return pgw_write_out(srv, sess, gh.out, send_ready)?
     }
     let out = pgw_exec_locked(pack, srv, sess.txn, sess.db, sql, sess.guc)?
     // session guc (incl. boila.user) follows server after exec
     if pack == 0 { sess.guc = out.srv.guc }
-    return pgw_write_out(fd, out.srv, sess, out, send_ready)?
+    return pgw_write_out(out.srv, sess, out, send_ready)?
 }
 
-fn pgw_run_sel(fd: i64, pack: i64, srv: BoilaServer, sess: BoilaPgSess, sel: BoilaSel, send_ready: i64) -> BoilaPgOut !IO !Net !Time !Par {
+fn pgw_run_sel(pack: i64, srv: BoilaServer, sess: BoilaPgSess, sel: BoilaSel, send_ready: i64) -> BoilaPgOut !IO !Net !Time !Par {
     pgw_note_pg(pack)?
     let out = pgw_exec_sel_locked(pack, srv, sess.txn, sess.db, sel)?
-    return pgw_write_out(fd, srv, sess, out, send_ready)?
+    return pgw_write_out(srv, sess, out, send_ready)?
 }
 
-fn pgw_run_ins(fd: i64, pack: i64, srv: BoilaServer, sess: BoilaPgSess, ins: BoilaIns, send_ready: i64) -> BoilaPgOut !IO !Net !Time !Par {
+fn pgw_run_ins(pack: i64, srv: BoilaServer, sess: BoilaPgSess, ins: BoilaIns, send_ready: i64) -> BoilaPgOut !IO !Net !Time !Par {
     pgw_note_pg(pack)?
     if pack == 0 {
-        return pgw_write_out(fd, srv, sess, boila_server_exec_ins(srv, sess.txn, sess.db, ins)?, send_ready)?
+        return pgw_write_out(srv, sess, boila_server_exec_ins(srv, sess.txn, sess.db, ins)?, send_ready)?
     }
-    return pgw_write_out(fd, srv, sess, boila_mt_exec_ins(pack, sess.txn, sess.db, ins)?, send_ready)?
+    return pgw_write_out(srv, sess, boila_mt_exec_ins(pack, sess.txn, sess.db, ins)?, send_ready)?
 }
 
-fn pgw_run_upd(fd: i64, pack: i64, srv: BoilaServer, sess: BoilaPgSess, upd: BoilaUpd, send_ready: i64) -> BoilaPgOut !IO !Net !Time !Par {
+fn pgw_run_upd(pack: i64, srv: BoilaServer, sess: BoilaPgSess, upd: BoilaUpd, send_ready: i64) -> BoilaPgOut !IO !Net !Time !Par {
     pgw_note_pg(pack)?
     if pack == 0 {
-        return pgw_write_out(fd, srv, sess, boila_server_exec_upd(srv, sess.txn, sess.db, upd)?, send_ready)?
+        return pgw_write_out(srv, sess, boila_server_exec_upd(srv, sess.txn, sess.db, upd)?, send_ready)?
     }
-    return pgw_write_out(fd, srv, sess, boila_mt_exec_upd(pack, sess.txn, sess.db, upd)?, send_ready)?
+    return pgw_write_out(srv, sess, boila_mt_exec_upd(pack, sess.txn, sess.db, upd)?, send_ready)?
 }
 
-fn pgw_run_del(fd: i64, pack: i64, srv: BoilaServer, sess: BoilaPgSess, del: BoilaDel, send_ready: i64) -> BoilaPgOut !IO !Net !Time !Par {
+fn pgw_run_del(pack: i64, srv: BoilaServer, sess: BoilaPgSess, del: BoilaDel, send_ready: i64) -> BoilaPgOut !IO !Net !Time !Par {
     pgw_note_pg(pack)?
     if pack == 0 {
-        return pgw_write_out(fd, srv, sess, boila_server_exec_del(srv, sess.txn, sess.db, del)?, send_ready)?
+        return pgw_write_out(srv, sess, boila_server_exec_del(srv, sess.txn, sess.db, del)?, send_ready)?
     }
-    return pgw_write_out(fd, srv, sess, boila_mt_exec_del(pack, sess.txn, sess.db, del)?, send_ready)?
+    return pgw_write_out(srv, sess, boila_mt_exec_del(pack, sess.txn, sess.db, del)?, send_ready)?
 }
 
 // Execute dispatch. Не връщай през `let mut ro = BoilaPgOut { srv, sess }`
 // в caller-а: свежият литерал се регистрира зад --rc и pop release-ва
 // споделения srv от mt_exec (pack != 0) → rc underflow на PlanCache.
 // fn резултатът не се регистрира (leak-safe), като Simple Query.
-fn pgw_exec_portal(fd: i64, pack: i64, srv: BoilaServer, sess: BoilaPgSess, name: str) -> BoilaPgOut !IO !Net !Time !Par {
+fn pgw_exec_portal(pack: i64, srv: BoilaServer, sess: BoilaPgSess, name: str) -> BoilaPgOut !IO !Net !Time !Par {
     if map_has(sess.portals, name) == 0 {
-        return pgw_run_sql(fd, pack, srv, sess, "", 0)?
+        return pgw_run_sql(pack, srv, sess, "", 0)?
     }
     let portal = map_get(sess.portals, name)
     if portal.kind == 0 - 1 {
-        return pgw_run_sql(fd, pack, srv, sess, "", 0)?
+        return pgw_run_sql(pack, srv, sess, "", 0)?
     }
     if portal.kind == 1 {
-        return pgw_run_sel(fd, pack, srv, sess, portal.sel, 0)?
+        return pgw_run_sel(pack, srv, sess, portal.sel, 0)?
     }
     if portal.kind == 2 {
-        return pgw_run_ins(fd, pack, srv, sess, portal.ins, 0)?
+        return pgw_run_ins(pack, srv, sess, portal.ins, 0)?
     }
     if portal.kind == 3 {
-        return pgw_run_upd(fd, pack, srv, sess, portal.upd, 0)?
+        return pgw_run_upd(pack, srv, sess, portal.upd, 0)?
     }
     if portal.kind == 4 {
-        return pgw_run_del(fd, pack, srv, sess, portal.del, 0)?
+        return pgw_run_del(pack, srv, sess, portal.del, 0)?
     }
     let full = pgw_subst_params(portal.sql, portal.vals, portal.nulls)
-    return pgw_run_sql(fd, pack, srv, sess, full, 0)?
+    return pgw_run_sql(pack, srv, sess, full, 0)?
 }
 
 fn pgw_do_parse(body: bytes, sess: BoilaPgSess) -> BoilaPgSess {

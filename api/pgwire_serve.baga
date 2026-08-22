@@ -13,11 +13,15 @@ import "serve_mt.baga"
 import "../server/databases.baga"
 import "../txn/mvcc.baga"
 import "std/net/tcp.baga"
+import "std/net/tls_server.baga"
+import "std/net/tls_conn.baga"
+import "std/crypto/pkey.baga"
+import "std/os/os.baga"
 import "std/str/str.baga"
 import "std/bytes/bytes.baga"
 
 // pack=0 for single-threaded tests; pack=cell2(mu,map_h) for MT serve.
-fn boila_pg_serve(fd: i64, srv: BoilaServer) -> BoilaPgOut !IO !Net !Time !Par {
+fn boila_pg_serve(fd: i64, srv: BoilaServer) -> BoilaPgOut !IO !Net !Time !Par !Random {
     return boila_pg_serve_p(fd, 0, srv)?
 }
 
@@ -32,13 +36,14 @@ struct BoilaPgStart {
     err: str
 }
 
-fn pgw_serve_startup(fd: i64, pack: i64, srv: BoilaServer) -> BoilaPgStart !IO !Net !Time !Par {
+fn pgw_serve_startup(fd: i64, pack: i64, srv: BoilaServer) -> BoilaPgStart !IO !Net !Time !Par !Random {
     let mut rr = pgw_reader(fd)
     let mut srv2 = srv
     let mut db = "boila"
     let mut login_user = ""
     let mut got = false
     let mut sp: BoilaPgSess = boila_pg_sess_new("boila")
+    sp.fd = fd
     while got == false {
         let st = pgw_read_startup(rr)?
         rr = st.r
@@ -47,11 +52,38 @@ fn pgw_serve_startup(fd: i64, pack: i64, srv: BoilaServer) -> BoilaPgStart !IO !
             return BoilaPgStart { rr: rr, srv: srv2, sess: sp, ok: 0, done: 0, err: "startup read" }
         }
         if st.code == 80877103 {
-            // SSLRequest → 'N' (няма TLS в P6) и нов startup
-            let w = pgw_write(fd, bytes_of_str("N"))?
-            if w != 0 {
-                tcp_close(fd)?
-                return BoilaPgStart { rr: rr, srv: srv2, sess: sp, ok: 0, done: 0, err: "ssl write" }
+            // SSLRequest → 'S' + TLS 1.3 ръкостискане, когато са зададени
+            // BOILA_TLS_CERT/BOILA_TLS_KEY (PEM пътища); иначе 'N'. Лош
+            // конфиг също пада към 'N' (честен fallback, без тих успех).
+            let mut ssl_on: i64 = 0
+            let certpath = env("BOILA_TLS_CERT")?
+            let keypath = env("BOILA_TLS_KEY")?
+            if certpath != "" && keypath != "" {
+                let cert_der = pem_der_block(read_file(certpath)?, "CERTIFICATE")
+                let key = pkey_parse_pem(read_file(keypath)?)
+                if key.ok == 1 && bytes_len(cert_der) > 0 {
+                    let ws = tcp_write_bytes(fd, bytes_of_str("S"))?
+                    if ws != 0 {
+                        tcp_close(fd)?
+                        return BoilaPgStart { rr: rr, srv: srv2, sess: sp, ok: 0, done: 0, err: "ssl write" }
+                    }
+                    let conn = tls_accept(fd, cert_der, key)?
+                    if conn.ok == 0 {
+                        tcp_close(fd)?
+                        return BoilaPgStart { rr: rr, srv: srv2, sess: sp, ok: 0, done: 0, err: conn.err }
+                    }
+                    sp.tls = 1
+                    sp.tconn = conn
+                    rr = pgw_reader_tls(fd, conn)
+                    ssl_on = 1
+                }
+            }
+            if ssl_on == 0 {
+                let w = tcp_write_bytes(fd, bytes_of_str("N"))?
+                if w != 0 {
+                    tcp_close(fd)?
+                    return BoilaPgStart { rr: rr, srv: srv2, sess: sp, ok: 0, done: 0, err: "ssl write" }
+                }
             }
         } else {
             if st.code == 80877102 {
@@ -81,12 +113,18 @@ fn pgw_serve_startup(fd: i64, pack: i64, srv: BoilaServer) -> BoilaPgStart !IO !
         db_ok = chk.ok
     }
     if db_ok == 0 {
-        let w = pgw_write(fd, pgw_error("3D000", concat("database ", concat(db, " does not exist"))))?
+        let w = pgw_write(sp, pgw_error("3D000", concat("database ", concat(db, " does not exist"))))?
         tcp_close(fd)?
-        return BoilaPgStart { rr: rr, srv: srv2, sess: sp, ok: 0, done: 0, err: "no db" }
+        return BoilaPgStart { rr: rr, srv: srv2, sess: w.sp, ok: 0, done: 0, err: "no db" }
     }
+    // новата сесия за базата запазва транспорта (TLS състоянието е от старта)
+    let saved_tls = sp.tls
+    let saved_tconn = sp.tconn
     sp = boila_pg_sess_new(db)
-    let au = pgw_authenticate(fd, rr, srv2, sp, login_user)?
+    sp.fd = fd
+    sp.tls = saved_tls
+    sp.tconn = saved_tconn
+    let au = pgw_authenticate(rr, srv2, sp, login_user)?
     srv2 = au.srv
     sp = au.sess
     rr = au.r
@@ -94,20 +132,22 @@ fn pgw_serve_startup(fd: i64, pack: i64, srv: BoilaServer) -> BoilaPgStart !IO !
         tcp_close(fd)?
         return BoilaPgStart { rr: rr, srv: srv2, sess: sp, ok: 0, done: 0, err: au.err }
     }
-    let w2 = pgw_write(fd, pgw_msg(82, pgw_be32(0)))?         // AuthenticationOk
-    if w2 != 0 {
+    let w2 = pgw_write(sp, pgw_msg(82, pgw_be32(0)))?         // AuthenticationOk
+    sp = w2.sp
+    if w2.ok != 0 {
         tcp_close(fd)?
         return BoilaPgStart { rr: rr, srv: srv2, sess: sp, ok: 0, done: 0, err: "authok write" }
     }
-    let w3 = pgw_send_startup_tail(fd, pgw_tx_status(sp))?
-    if w3 != 0 {
+    let w3 = pgw_send_startup_tail(sp, pgw_tx_status(sp))?
+    sp = w3.sp
+    if w3.ok != 0 {
         tcp_close(fd)?
         return BoilaPgStart { rr: rr, srv: srv2, sess: sp, ok: 0, done: 0, err: "tail write" }
     }
     return BoilaPgStart { rr: rr, srv: srv2, sess: sp, ok: 1, done: 1, err: "" }
 }
 
-fn boila_pg_serve_p(fd: i64, pack: i64, srv: BoilaServer) -> BoilaPgOut !IO !Net !Time !Par {
+fn boila_pg_serve_p(fd: i64, pack: i64, srv: BoilaServer) -> BoilaPgOut !IO !Net !Time !Par !Random {
     let st = pgw_serve_startup(fd, pack, srv)?
     if st.ok == 0 {
         return BoilaPgOut { srv: st.srv, sess: st.sess, ok: 0, sql_err: 0, err: st.err }
@@ -145,8 +185,9 @@ fn boila_pg_serve_p(fd: i64, pack: i64, srv: BoilaServer) -> BoilaPgOut !IO !Net
         } else {
             if in_err {
                 if m.typ == 83 {                              // 'S' Sync
-                    let w = pgw_write(fd, pgw_ready(pgw_tx_status(sp)))?
-                    if w != 0 {
+                    let w = pgw_write(sp, pgw_ready(pgw_tx_status(sp)))?
+                    sp = w.sp
+                    if w.ok != 0 {
                         running = false
                     }
                     in_err = false
@@ -159,14 +200,14 @@ fn boila_pg_serve_p(fd: i64, pack: i64, srv: BoilaServer) -> BoilaPgOut !IO !Net
             } else {
             if m.typ == 81 {                                  // 'Q' simple
                 let sql = pgw_cstr_read(m.body, 0)
-                let cin = pgw_copy_in_run(fd, pack, srv2, sp, sql.s, rr)?
+                let cin = pgw_copy_in_run(pack, srv2, sp, sql.s, rr)?
                 if cin.hit == 1 {
                     rr = cin.rr
                     if pack == 0 { srv2 = cin.srv }
                     sp = cin.sess
                     if cin.ok == 0 { running = false }
                 } else {
-                let ro = pgw_run_sql(fd, pack, srv2, sp, sql.s, 1)?
+                let ro = pgw_run_sql(pack, srv2, sp, sql.s, 1)?
                 // pack!=0: ro.srv е throwaway seed (алокиран след mem_mark).
                 // srv2 е track-нат; assign release-ва стария след rewind →
                 // rc underflow. Реалният сървър е в pack.
@@ -181,15 +222,17 @@ fn boila_pg_serve_p(fd: i64, pack: i64, srv: BoilaServer) -> BoilaPgOut !IO !Net
             } else {
                 if m.typ == 80 {                              // 'P' Parse
                     sp = pgw_do_parse(m.body, sp)
-                    let w = pgw_write(fd, pgw_msg(49, bytes_new(0)))?   // '1'
-                    if w != 0 {
+                    let w = pgw_write(sp, pgw_msg(49, bytes_new(0)))?   // '1'
+                    sp = w.sp
+                    if w.ok != 0 {
                         running = false
                     }
                 } else {
                     if m.typ == 66 {                          // 'B' Bind
                         sp = pgw_do_bind(m.body, sp)
-                        let w = pgw_write(fd, pgw_msg(50, bytes_new(0)))?   // '2'
-                        if w != 0 {
+                        let w = pgw_write(sp, pgw_msg(50, bytes_new(0)))?   // '2'
+                        sp = w.sp
+                        if w.ok != 0 {
                             running = false
                         }
                     } else {
@@ -198,12 +241,13 @@ fn boila_pg_serve_p(fd: i64, pack: i64, srv: BoilaServer) -> BoilaPgOut !IO !Net
                             if pack == 0 {
                                 srv2 = dbuf.srv
                             }
-                            let w = pgw_write(fd, dbuf.buf)?
-                            if w != 0 { running = false }
+                            let w = pgw_write(sp, dbuf.buf)?
+                            sp = w.sp
+                            if w.ok != 0 { running = false }
                         } else {
                             if m.typ == 69 {                  // 'E' Execute
                                 let pn = pgw_cstr_read(m.body, 0)
-                                let ro = pgw_exec_portal(fd, pack, srv2, sp, pn.s)?
+                                let ro = pgw_exec_portal(pack, srv2, sp, pn.s)?
                                 if pack == 0 {
                                     srv2 = ro.srv
                                 }
@@ -234,8 +278,9 @@ fn boila_pg_serve_p(fd: i64, pack: i64, srv: BoilaServer) -> BoilaPgOut !IO !Net
                                             }
                                         }
                                     }
-                                    let w = pgw_write(fd, pgw_ready(pgw_tx_status(sp)))?
-                                    if w != 0 {
+                                    let w = pgw_write(sp, pgw_ready(pgw_tx_status(sp)))?
+                                    sp = w.sp
+                                    if w.ok != 0 {
                                         running = false
                                     }
                                 } else {
@@ -258,8 +303,9 @@ fn boila_pg_serve_p(fd: i64, pack: i64, srv: BoilaServer) -> BoilaPgOut !IO !Net
                                             }
                                             map_del(sp.portals, nm.s)
                                         }
-                                        let w = pgw_write(fd, pgw_msg(51, bytes_new(0)))?   // '3'
-                                        if w != 0 {
+                                        let w = pgw_write(sp, pgw_msg(51, bytes_new(0)))?   // '3'
+                                        sp = w.sp
+                                        if w.ok != 0 {
                                             running = false
                                         }
                                     } else {
@@ -273,8 +319,9 @@ fn boila_pg_serve_p(fd: i64, pack: i64, srv: BoilaServer) -> BoilaPgOut !IO !Net
                                                 }
                                             } else {
                                                 // непознато → ErrorResponse
-                                                let w = pgw_write(fd, pgw_error("0A000", concat("unsupported message ", int_to_str(m.typ))))?
-                                                if w != 0 {
+                                                let w = pgw_write(sp, pgw_error("0A000", concat("unsupported message ", int_to_str(m.typ))))?
+                                                sp = w.sp
+                                                if w.ok != 0 {
                                                     running = false
                                                 }
                                             }
@@ -297,7 +344,9 @@ fn boila_pg_serve_p(fd: i64, pack: i64, srv: BoilaServer) -> BoilaPgOut !IO !Net
                 nb = bytes_slice(rr.buf, rr.pos, bytes_len(rr.buf))
             }
             mem_persist_end()
-            rr = PgWReader { fd: fd, buf: nb, pos: 0 }
+            // TLS: ключовете на tconn са от старта (преди mark-а) — оцеляват
+            // rewind; новият reader запазва транспортните полета.
+            rr = PgWReader { fd: fd, buf: nb, pos: 0, tls: rr.tls, tconn: rr.tconn }
             sp.txn = idle_txn
             mem_rewind(rmark)
             have_mark = false

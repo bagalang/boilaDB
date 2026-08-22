@@ -49,7 +49,7 @@ fn boila_pool_worker(ctx: i64) -> i64 !IO !Net !Time !Par {
                 running = 0
             } else {
                 // Swallow conn IO so one bad peer does not kill the worker.
-                let _c = boila_pool_handle(fd, pack) catch !IO => 0 catch !Net => 0 catch !Time => 0
+                let _c = boila_pool_handle(fd, pack) catch !IO => 0 catch !Net => 0 catch !Time => 0 catch !Random => 0
             }
         }
     }

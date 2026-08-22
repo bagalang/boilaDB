@@ -2,10 +2,12 @@
 // Формати: https://www.postgresql.org/docs/current/protocol-message-formats.html
 // Регулярни съобщения: Byte1(type) + Int32(len incl. self) + payload.
 // StartupMessage/SSLRequest/CancelRequest нямат type байт.
+// Транспорт: PgWReader.tls/tconn — TLS четене (писането е в BoilaPgSess).
 
 import "std/bytes/bytes.baga"
 import "std/str/str.baga"
 import "std/net/tcp.baga"
+import "std/net/tls_conn.baga"
 
 // --- builders (чисти) ---
 
@@ -76,11 +78,19 @@ fn pgw_be_read(b: bytes, off: i64, n: i64) -> i64 {
 struct PgWReader {
     fd: i64,
     buf: bytes,
-    pos: i64
+    pos: i64,
+    // tls=1 → четене през tconn (декриптирани TLS записи), иначе суров TCP.
+    // Писането е отделно: виж BoilaPgSess.tls/tconn.
+    tls: i64,
+    tconn: TlsConn
 }
 
 fn pgw_reader(fd: i64) -> PgWReader {
-    return PgWReader { fd: fd, buf: bytes_new(0), pos: 0 }
+    return PgWReader { fd: fd, buf: bytes_new(0), pos: 0, tls: 0, tconn: tls_conn_bad("") }
+}
+
+fn pgw_reader_tls(fd: i64, conn: TlsConn) -> PgWReader {
+    return PgWReader { fd: fd, buf: bytes_new(0), pos: 0, tls: 1, tconn: conn }
 }
 
 struct PgWFill {
@@ -88,17 +98,35 @@ struct PgWFill {
     ok: i64
 }
 
+// Append one chunk of inbound data, preserving the transport fields.
+fn pgw_fill_append(rr: PgWReader, chunk: bytes) -> PgWReader {
+    if rr.pos > 0 {
+        return PgWReader { fd: rr.fd, buf: bytes_concat(bytes_slice(rr.buf, rr.pos, bytes_len(rr.buf)), chunk), pos: 0, tls: rr.tls, tconn: rr.tconn }
+    }
+    return PgWReader { fd: rr.fd, buf: bytes_concat(rr.buf, chunk), pos: rr.pos, tls: rr.tls, tconn: rr.tconn }
+}
+
 fn pgw_fill(r: PgWReader, n: i64) -> PgWFill !IO !Net !Par {
     let mut rr = r
     while bytes_len(rr.buf) - rr.pos < n {
-        let chunk = tcp_read_bytes(rr.fd, 8192)?
-        if bytes_len(chunk) == 0 {
-            return PgWFill { r: rr, ok: 0 }
-        }
-        if rr.pos > 0 {
-            rr = PgWReader { fd: rr.fd, buf: bytes_concat(bytes_slice(rr.buf, rr.pos, bytes_len(rr.buf)), chunk), pos: 0 }
+        if rr.tls == 1 {
+            // One TLS record at a time; application payloads (23) accumulate
+            // into the plaintext buffer. Alerts/skip → EOF for this conn.
+            let rd = tls_conn_read(rr.tconn)?
+            rr.tconn = rd.conn
+            if rd.conn.ok == 0 || rd.typ == 21 || rd.typ == 0 {
+                return PgWFill { r: rr, ok: 0 }
+            }
+            if rd.typ == 23 && bytes_len(rd.data) > 0 {
+                rr = pgw_fill_append(rr, rd.data)
+            }
+            // typ 22 (post-handshake) — skip
         } else {
-            rr = PgWReader { fd: rr.fd, buf: bytes_concat(rr.buf, chunk), pos: rr.pos }
+            let chunk = tcp_read_bytes(rr.fd, 8192)?
+            if bytes_len(chunk) == 0 {
+                return PgWFill { r: rr, ok: 0 }
+            }
+            rr = pgw_fill_append(rr, chunk)
         }
     }
     return PgWFill { r: rr, ok: 1 }

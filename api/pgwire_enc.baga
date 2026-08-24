@@ -31,6 +31,9 @@ fn boila_pg_pick(vals: Vec<str>, nulls: Vec<i64>, n: i64) -> BoilaVal {
 }
 
 // Дали низ е цяло число (по избор водещ '-').
+// Числа с водещи нули ("0000000001") НЕ са — остават текст, за да се запазят
+// (ЕИК/фактурни номера). При нужда от число такава колона ги коерцира сама
+// (виж lit_coerce.baga). Самото "0" е число.
 fn pgw_is_int(s: str) -> i64 {
     let n = len(s)
     if n == 0 {
@@ -42,6 +45,9 @@ fn pgw_is_int(s: str) -> i64 {
             return 0
         }
         i = 1
+    }
+    if n - i > 1 && char_at(s, i) == 48 {
+        return 0
     }
     while i < n {
         let c = char_at(s, i)

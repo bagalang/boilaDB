@@ -17,6 +17,7 @@ import "../graph/dml.baga"
 import "../ts/rollup.baga"
 import "../txn/mvcc.baga"
 import "ast.baga"
+import "lit_coerce.baga"
 import "exec_scan.baga"
 import "exec_proj.baga"
 import "exec_buf.baga"
@@ -131,6 +132,9 @@ fn boila_exec_update(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, upd: BoilaUpd)
                     v = ev.val
                 }
                 let cd = vec_get(t.cols, vec_get(six, c))
+                if vec_len(sx) == 0 {
+                    v = boila_lit_coerce(cd.typ, v)
+                }
                 if boila_dml_val_ok(cd.typ, v) == 0 {
                     return boila_dml_fail(s, txn, 7, concat("стойност за '", concat(cd.name, "' не съответства на типа")), "42804")
                 }

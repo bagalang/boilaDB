@@ -14,6 +14,7 @@ import "../fts/fts.baga"
 import "../core/budget.baga"
 import "../txn/mvcc.baga"
 import "ast.baga"
+import "lit_coerce.baga"
 import "exec_sort.baga"
 import "exec_buf.baga"
 import "exec_filter.baga"
@@ -60,6 +61,7 @@ fn boila_fetch_pks(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, sel: BoilaSel) -
     if sel.has_lo == 1 {
         let cix = boila_col_idx(t, sel.lo_col)
         if cix < 0 { return boila_pks_fail(s, txn, concat("колона '", concat(sel.lo_col, "' не съществува")), "42703") }
+        sel.pk_lo = boila_lit_coerce(vec_get(t.cols, cix).typ, sel.pk_lo)
         if boila_pk_lit_ok(vec_get(t.cols, cix).typ, sel.pk_lo) == 0 {
             return boila_pks_fail(s, txn, "литералът в >= не съответства на типа на колоната", "42804")
         }
@@ -68,6 +70,7 @@ fn boila_fetch_pks(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, sel: BoilaSel) -
     if sel.has_hi == 1 {
         let cix = boila_col_idx(t, sel.hi_col)
         if cix < 0 { return boila_pks_fail(s, txn, concat("колона '", concat(sel.hi_col, "' не съществува")), "42703") }
+        sel.pk_hi = boila_lit_coerce(vec_get(t.cols, cix).typ, sel.pk_hi)
         if boila_pk_lit_ok(vec_get(t.cols, cix).typ, sel.pk_hi) == 0 {
             return boila_pks_fail(s, txn, "литералът в <= не съответства на типа на колоната", "42804")
         }
@@ -82,6 +85,7 @@ fn boila_fetch_pks(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, sel: BoilaSel) -
             return BoilaPksOut { s: s, txn: txn, ok: 1, err: "", state: "", pks: pks }
         }
         if sel.eq_col == pkcol.name {
+            sel.pk_eq = boila_lit_coerce(pkcol.typ, sel.pk_eq)
             if boila_pk_lit_ok(pkcol.typ, sel.pk_eq) == 0 {
                 return boila_pks_fail(s, txn, "литералът в = не съответства на типа на PRIMARY KEY", "42804")
             }
@@ -97,6 +101,7 @@ fn boila_fetch_pks(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, sel: BoilaSel) -
             return boila_pks_fail(s, txn, concat("колона '", concat(sel.eq_col, "' не съществува")), "42703")
         }
         let cd = vec_get(t.cols, cix)
+        sel.pk_eq = boila_lit_coerce(cd.typ, sel.pk_eq)
         if boila_pk_lit_ok(cd.typ, sel.pk_eq) == 0 {
             return boila_pks_fail(s, txn, "литералът в = не съответства на типа на колоната", "42804")
         }

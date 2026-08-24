@@ -2,6 +2,7 @@
 import "../core/value.baga"
 import "../catalog/schema.baga"
 import "ast.baga"
+import "lit_coerce.baga"
 import "exec_like.baga"
 import "std/str/str.baga"
 
@@ -76,7 +77,7 @@ fn boila_row_pass_filters(row: Vec<BoilaVal>, t: BoilaTable, sel: BoilaSel) -> i
         let mut hit: i64 = 0
         let mut j: i64 = 0
         while j < vec_len(sel.in_vals) {
-            if boila_val_cmp(v, vec_get(sel.in_vals, j)) == 0 { hit = 1 }
+            if boila_val_cmp(v, boila_lit_coerce(vec_get(t.cols, cix).typ, vec_get(sel.in_vals, j))) == 0 { hit = 1 }
             j = j + 1
         }
         if sel.has_in == 1 && hit == 0 { return 0 }
@@ -87,7 +88,7 @@ fn boila_row_pass_filters(row: Vec<BoilaVal>, t: BoilaTable, sel: BoilaSel) -> i
         if cix < 0 || cix >= vec_len(row) { return 0 }
         let v = vec_get(row, cix)
         if v.tag == boila_v_null() { return 0 }
-        if boila_val_cmp(v, sel.pk_ne) == 0 { return 0 }
+        if boila_val_cmp(v, boila_lit_coerce(vec_get(t.cols, cix).typ, sel.pk_ne)) == 0 { return 0 }
     }
     return 1
 }

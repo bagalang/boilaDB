@@ -12,6 +12,7 @@ import "../index/secondary.baga"
 import "../index/range.baga"
 import "../txn/mvcc.baga"
 import "ast.baga"
+import "lit_coerce.baga"
 import "exec_scan.baga"
 import "exec_sort.baga"
 import "exec_filter.baga"
@@ -75,6 +76,7 @@ fn boila_agg_scan(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, sel: BoilaSel) ->
         if cix < 0 {
             return boila_exec_fail(s, txn, concat("колона '", concat(sel.lo_col, "' не съществува")), "42703")
         }
+        sel.pk_lo = boila_lit_coerce(vec_get(t.cols, cix).typ, sel.pk_lo)
         if boila_pk_lit_ok(vec_get(t.cols, cix).typ, sel.pk_lo) == 0 {
             return boila_exec_fail(s, txn, "литералът в >= не съответства на типа на колоната", "42804")
         }
@@ -85,6 +87,7 @@ fn boila_agg_scan(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, sel: BoilaSel) ->
         if cix < 0 {
             return boila_exec_fail(s, txn, concat("колона '", concat(sel.hi_col, "' не съществува")), "42703")
         }
+        sel.pk_hi = boila_lit_coerce(vec_get(t.cols, cix).typ, sel.pk_hi)
         if boila_pk_lit_ok(vec_get(t.cols, cix).typ, sel.pk_hi) == 0 {
             return boila_exec_fail(s, txn, "литералът в <= не съответства на типа на колоната", "42804")
         }

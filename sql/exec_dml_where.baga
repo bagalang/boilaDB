@@ -14,6 +14,7 @@ import "token.baga"
 import "exec_scan.baga"
 import "exec_buf.baga"
 import "exec_dml.baga"
+import "lit_coerce.baga"
 import "exec_xw.baga"
 import "std/str/str.baga"
 import "std/bytes/bytes.baga"
@@ -33,6 +34,7 @@ fn boila_dml_targets(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, eq_col: str, h
     let pkcol = vec_get(t.cols, t.pk_idx)
     if has_eq == 1 {
         if eq_col == pkcol.name {
+            v_eq = boila_lit_coerce(pkcol.typ, v_eq)
             if boila_pk_lit_ok(pkcol.typ, v_eq) == 0 {
                 return BoilaDmlTgts { s: s, txn: txn, ok: 0, err: "литералът в = не съответства на PRIMARY KEY типа", state: "42804", pks: pks }
             }
@@ -44,6 +46,7 @@ fn boila_dml_targets(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, eq_col: str, h
             return BoilaDmlTgts { s: s, txn: txn, ok: 0, err: concat("колона '", concat(eq_col, "' не съществува")), state: "42703", pks: pks }
         }
         let cd = vec_get(t.cols, cix)
+        v_eq = boila_lit_coerce(cd.typ, v_eq)
         if boila_dml_val_ok(cd.typ, v_eq) == 0 {
             return BoilaDmlTgts { s: s, txn: txn, ok: 0, err: "литералът в = не съответства на типа на колоната", state: "42804", pks: pks }
         }
@@ -83,6 +86,7 @@ fn boila_dml_targets(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, eq_col: str, h
         if lo_cix < 0 {
             return BoilaDmlTgts { s: s, txn: txn, ok: 0, err: concat("колона '", concat(lo_col, "' не съществува")), state: "42703", pks: pks }
         }
+        v_lo = boila_lit_coerce(vec_get(t.cols, lo_cix).typ, v_lo)
         if boila_dml_val_ok(vec_get(t.cols, lo_cix).typ, v_lo) == 0 {
             return BoilaDmlTgts { s: s, txn: txn, ok: 0, err: "литералът в >= не съответства на типа на колоната", state: "42804", pks: pks }
         }
@@ -93,6 +97,7 @@ fn boila_dml_targets(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, eq_col: str, h
         if hi_cix < 0 {
             return BoilaDmlTgts { s: s, txn: txn, ok: 0, err: concat("колона '", concat(hi_col, "' не съществува")), state: "42703", pks: pks }
         }
+        v_hi = boila_lit_coerce(vec_get(t.cols, hi_cix).typ, v_hi)
         if boila_dml_val_ok(vec_get(t.cols, hi_cix).typ, v_hi) == 0 {
             return BoilaDmlTgts { s: s, txn: txn, ok: 0, err: "литералът в <= не съответства на типа на колоната", state: "42804", pks: pks }
         }

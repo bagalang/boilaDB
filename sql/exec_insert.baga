@@ -222,7 +222,7 @@ fn boila_insert_one(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, ins: BoilaIns, 
             return boila_insert_one_fail(s, txn, "дублиран PRIMARY KEY (без ON CONFLICT)", "23505")
         }
         if ins.oc == 2 {
-            let old = boila_row_dec(g.row)
+            let old = boila_row_pad(boila_row_dec(g.row), vec_len(t.cols))
             return boila_insert_upsert(s, txn, t, ins, prep, ftsl, hnswl, grpl, rul, full, pkenc, old)?
         }
         // oc == 1 (DO NOTHING): пропусни реда

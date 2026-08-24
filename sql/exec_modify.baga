@@ -117,7 +117,7 @@ fn boila_exec_update(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, upd: BoilaUpd)
         let g = boila_txn_get(s, txn, t.id, pkenc)?
         s = g.s
         if g.found == 1 {
-            let old = boila_row_dec(g.row)
+            let old = boila_row_pad(boila_row_dec(g.row), vec_len(t.cols))
             let new = boila_row_copy(old)
             let mut c: i64 = 0
             while c < vec_len(six) {
@@ -284,7 +284,7 @@ fn boila_exec_delete(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, del: BoilaDel)
         let g0 = boila_txn_get(s, txn, t.id, vec_get(tg.pks, di))?
         s = g0.s
         if g0.found == 1 {
-            vec_push(del_rows, boila_row_dec(g0.row))
+            vec_push(del_rows, boila_row_pad(boila_row_dec(g0.row), vec_len(t.cols)))
         }
         di = di + 1
     }
@@ -309,7 +309,7 @@ fn boila_exec_delete(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, del: BoilaDel)
         let g = boila_txn_get(s, txn, t.id, pkenc)?
         s = g.s
         if g.found == 1 {
-            let old = boila_row_dec(g.row)
+            let old = boila_row_pad(boila_row_dec(g.row), vec_len(t.cols))
             let xd = boila_ix_del_all_txn(s, txn, t, old, pkenc)
             if xd.ok == 0 {
                 return boila_dml_fail(s, txn, 8, xd.err, xd.state)

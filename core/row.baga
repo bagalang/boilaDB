@@ -46,6 +46,15 @@ fn boila_row_dec(b: bytes) -> Vec<BoilaVal> {
     return out
 }
 
+// Пълни декодиран ред до ncols с NULL — за редове, записани преди
+// ALTER TABLE ADD COLUMN (схемата е по-широка от съхранения ред).
+fn boila_row_pad(row: Vec<BoilaVal>, ncols: i64) -> Vec<BoilaVal> {
+    while vec_len(row) < ncols {
+        vec_push(row, boila_val_null())
+    }
+    return row
+}
+
 // JSON литерал на стойност (за HTTP изхода). bytes → hex стринг,
 // json tag → суровият payload (вече е JSON).
 fn boila_val_json_lit(v: BoilaVal) -> str {

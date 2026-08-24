@@ -5,6 +5,35 @@ V = value/codec/vector, K = key/scan, S = storage, M = metrics/monitoring,
 H = HTTP/API, Q = SQL (от P1), C = cache/planner, A = агрегати,
 T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
 
+## P25 — ROWS / RANGE frames (opened 2026-08-24)
+
+- **W6 — (FIXED P25) ROWS frames.** `UNBOUNDED PRECEDING/FOLLOWING`,
+  `CURRENT ROW`, `n PRECEDING/FOLLOWING`; abbreviated `ROWS start`.
+  Gate: `boila_window_test` rows_run_* / rows_1prec_*. Residual:
+  `GROUPS`; `RANGE n PRECEDING`.
+- **W7 — (FIXED P25) RANGE unbounded.** `BETWEEN UNBOUNDED PRECEDING
+  AND {CURRENT ROW|UNBOUNDED FOLLOWING}`. Offset RANGE → `0A000`.
+
+## P24 — NTILE + named WINDOW (opened 2026-08-24)
+
+- **W4 — (FIXED P24) NTILE(n).** Extra rows to earlier buckets; `n > N`
+  → buckets 1..N. Gate: `boila_window_test` ntile_*. Residual: no
+  WINDOW inheritance; frames — P25.
+- **W5 — (FIXED P24) named WINDOW.** `OVER w` + `WINDOW w AS (spec)`.
+  Gate: `named_ok` / `named_missing`. Residual: one spec per query
+  still (mixing two named windows with different specs → 0A000).
+
+## P23 — LAG / LEAD (opened 2026-08-24)
+
+- **W3 — (FIXED P23) LAG/LEAD.** `LAG(col [, offset [, default]])` /
+  `LEAD(…)` `OVER (PARTITION BY … ORDER BY …)`. Offset is a
+  non-negative integer literal (default 1); `$N` offset/default →
+  `0A000`; negative offset → `22023`. Out of the partition → default
+  or NULL. Output type is the source column. Mix with ranking/agg
+  under the **same** OVER spec. Gate: `tests/boila_window_test`
+  lag_*/lead_*. Residual: frame clause; NTILE/named WINDOW — P24.
+  clause; offset is rows not peers.
+
 ## P22 — serve residuals (opened 2026-08-21)
 
 - **C1 — (FIXED P22-1) COPY FROM in MT pool.** `pgw_copy_in_run`
@@ -151,12 +180,14 @@ T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
   `tests/boila_declex_test`. Residual: `NUMERIC(p,s)` + sort-order —
   P22-2; `sum`/`avg` — P20-4.
 - **N2 — (FIXED P13) Window functions.** `parse_window` + `exec_window`.
-  Residual: един OVER spec; няма LAG/LEAD/NTILE/named WINDOW;
+  Residual: един OVER spec; GROUPS / RANGE n PRECEDING — 0A000;
+  LAG/LEAD — P23; NTILE/named WINDOW — P24; frames — P25;
+  NTILE/named WINDOW — P24;
   няма frame clause; няма window+GROUP BY.
 - **N3 — (FIXED P14) COPY.** STDIN/STDOUT text+csv; wire CopyIn/Out.
   Residual: no binary/file/HEADER. COPY FROM MT pool — P22-1.
 - **N4 — (FIXED P15) SCRAM-SHA-256.** s1 verifier; auto SASL; live
-  pgbaga. Residual: no PLUS/TLS/MD5.
+  pgbaga. Residual: no PLUS/MD5; TLS — P22-3.
 - **N5 — (P16–P19 FIXED) filter-GC / SSI-lite / local FDW / raft
   replica.** Residual: N=3 in-process; SQL replay не WAL bytes;
   няма 2PC; няма remote FDW.

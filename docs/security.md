@@ -2,8 +2,9 @@
 
 Auth is **SCRAM-SHA-256 (P15)** when the user has an `s1:` verifier
 (CREATE/ALTER USER writes that), **cleartext** for leftover `h2:`
-rows, or a **shared token**. There is no TLS (gaps W6). Put boilaDB
-behind a trusted network or a TLS terminator if it leaves localhost.
+rows, or a **shared token**. PG wire is TLS 1.3 when `BOILA_TLS_CERT`
+and `BOILA_TLS_KEY` (PEM) are set (P22-3). HTTP stays plaintext — put
+it behind a terminator if it leaves localhost.
 
 ## Modes
 

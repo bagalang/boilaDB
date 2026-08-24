@@ -9,6 +9,8 @@ import "ast.baga"
 import "exec_scan.baga"
 import "exec_proj.baga"
 import "exec_sort.baga"
+import "exec_window_off.baga"
+import "exec_window_frame.baga"
 import "std/str/str.baga"
 import "std/bytes/bytes.baga"
 
@@ -24,6 +26,9 @@ fn boila_sel_has_win(sel: BoilaSel) -> i64 {
 }
 
 fn boila_win_spec_eq(a: BoilaWin, b: BoilaWin) -> i64 {
+    if a.fk != b.fk || a.fs != b.fs || a.fe != b.fe || a.na != b.na || a.nb != b.nb {
+        return 0
+    }
     if vec_len(a.part) != vec_len(b.part) || vec_len(a.ord) != vec_len(b.ord) {
         return 0
     }
@@ -179,12 +184,16 @@ fn boila_win_select(s: BoilaStore, txn: BoilaTxn, cols: Vec<BoilaColDef>, rows: 
     let kinds: Vec<i64> = vec_new()
     let acols: Vec<i64> = vec_new()
     let isnum: Vec<i64> = vec_new()
+    let offs: Vec<i64> = vec_new()
+    let defs: Vec<BoilaVal> = vec_new()
     i = 0
     while i < vec_len(sel.items) {
         let it = vec_get(sel.items, i)
         if it.win.kind > 0 {
             vec_push(pcols, 0 - 1)
             vec_push(kinds, it.win.kind)
+            vec_push(offs, it.win.off)
+            vec_push(defs, it.win.def)
             let mut ax: i64 = 0 - 1
             if it.win.kind >= 4 && it.col != "" {
                 ax = boila_col_idx_of(cols, it.col)
@@ -193,7 +202,8 @@ fn boila_win_select(s: BoilaStore, txn: BoilaTxn, cols: Vec<BoilaColDef>, rows: 
                 }
             }
             vec_push(acols, ax)
-            // P21-5: NUMERIC sum/avg/min/max keep the decimal output type
+            // P21-5: NUMERIC sum/avg/min/max keep the decimal output type.
+            // P23: LAG/LEAD take the source column type.
             let mut isn: i64 = 0
             let mut ty = boila_v_i64()
             if (it.win.kind == 4 || it.win.kind == 5 || it.win.kind == 7 || it.win.kind == 8) && ax >= 0 && ax < vec_len(cols) {
@@ -201,6 +211,9 @@ fn boila_win_select(s: BoilaStore, txn: BoilaTxn, cols: Vec<BoilaColDef>, rows: 
                     isn = 1
                     ty = boila_v_num()
                 }
+            }
+            if (it.win.kind == 9 || it.win.kind == 10) && ax >= 0 && ax < vec_len(cols) {
+                ty = vec_get(cols, ax).typ
             }
             vec_push(isnum, isn)
             boila_result_add_col(res, boila_sel_item_out_name(it), ty)
@@ -215,6 +228,8 @@ fn boila_win_select(s: BoilaStore, txn: BoilaTxn, cols: Vec<BoilaColDef>, rows: 
             vec_push(kinds, 0)
             vec_push(acols, 0 - 1)
             vec_push(isnum, 0)
+            vec_push(offs, 1)
+            vec_push(defs, boila_val_null())
         }
         i = i + 1
     }
@@ -243,7 +258,7 @@ fn boila_win_select(s: BoilaStore, txn: BoilaTxn, cols: Vec<BoilaColDef>, rows: 
             i = 0
             while i < vec_len(kinds) {
                 let knd = vec_get(kinds, i)
-                if knd >= 4 {
+                if knd >= 4 && knd <= 8 && boila_win_use_peer(wspec) == 1 {
                     let mut r = g0
                     while r < g1 {
                         let row = vec_get(rows, r)
@@ -299,21 +314,33 @@ fn boila_win_select(s: BoilaStore, txn: BoilaTxn, cols: Vec<BoilaColDef>, rows: 
                             vec_push(out, boila_val_null())
                         }
                     } else {
-                        if knd == 1 {
-                            vec_push(out, boila_val_i64(pos))
+                        if knd == 9 || knd == 10 {
+                            vec_push(out, boila_win_off_val(knd, rows, r, p0, p1, vec_get(acols, i), vec_get(offs, i), vec_get(defs, i)))
                         } else {
-                            if knd == 2 {
-                                vec_push(out, boila_val_i64(rank))
+                            if knd == 11 {
+                                vec_push(out, boila_val_i64(boila_win_ntile(vec_get(offs, i), r - p0, p1 - p0)))
                             } else {
-                                if knd == 3 {
-                                    vec_push(out, boila_val_i64(dense))
+                            if knd == 1 {
+                                vec_push(out, boila_val_i64(pos))
+                            } else {
+                                if knd == 2 {
+                                    vec_push(out, boila_val_i64(rank))
                                 } else {
-                                    if vec_get(isnum, i) == 1 && (knd == 4 || knd == 5 || knd == 7 || knd == 8) {
-                                        vec_push(out, boila_win_out_num(knd, vec_get(naccs, i), vec_get(cnts, i)))
+                                    if knd == 3 {
+                                        vec_push(out, boila_val_i64(dense))
                                     } else {
-                                        vec_push(out, boila_win_out(knd, vec_get(accs, i), vec_get(cnts, i)))
+                                        if knd >= 4 && knd <= 8 && boila_win_use_peer(wspec) == 0 {
+                                            vec_push(out, boila_win_frame_val(knd, vec_get(isnum, i), rows, r, p0, p1, vec_get(acols, i), wspec))
+                                        } else {
+                                        if vec_get(isnum, i) == 1 && (knd == 4 || knd == 5 || knd == 7 || knd == 8) {
+                                            vec_push(out, boila_win_out_num(knd, vec_get(naccs, i), vec_get(cnts, i)))
+                                        } else {
+                                            vec_push(out, boila_win_out(knd, vec_get(accs, i), vec_get(cnts, i)))
+                                        }
+                                        }
                                     }
                                 }
+                            }
                             }
                         }
                     }

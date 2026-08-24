@@ -28,6 +28,7 @@ fn boila_rel_is_tail(t: Token) -> i64 {
     if tok_kw(t, "left") == 1 { return 1 }
     if tok_kw(t, "group") == 1 { return 1 }
     if tok_kw(t, "having") == 1 { return 1 }
+    if tok_kw(t, "window") == 1 { return 1 }
     if tok_kw(t, "order") == 1 { return 1 }
     if tok_kw(t, "limit") == 1 { return 1 }
     if tok_kw(t, "offset") == 1 { return 1 }

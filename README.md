@@ -36,7 +36,7 @@ the SQL flagship on top of the RocksDB-class engine:
 
 ## Status
 
-Phases **P0–P21** landed. Core + modalities (NUMERIC, window, COPY,
+Phases **P0–P25** landed. Core + modalities (NUMERIC, window, COPY,
 SCRAM, filter-GC, serializable, local FDW, raft replica), then the
 application-ready SQL surface — P20: UNIQUE indexes, NOT NULL / DEFAULT,
 SERIAL / BIGSERIAL, decimal SUM/AVG, `to_char`; and P21 schema
@@ -47,7 +47,8 @@ numeric HAVING and window SUM/AVG/MIN/MAX over NUMERIC. v0.7 also ships
 Concurrent HTTP + PG:
 bounded `BOILA_WORKERS` pool (default 4; `=0` → `go_bg` per conn),
 hop-less per-shard stores, shared per-db plan cache. Data SQL is a
-shared lock; schema DDL is exclusive per database. No TLS (gaps W6).
+shared lock; schema DDL is exclusive per database. PG wire TLS 1.3 when
+`BOILA_TLS_CERT`/`BOILA_TLS_KEY` are set (P22-3).
 
 | Surface | Result |
 |---------|--------|
@@ -66,7 +67,7 @@ Numbers: `bench/boila/results/`. Architecture and phase gates:
 
 | Area | What ships |
 |------|------------|
-| **SQL** | SELECT / INSERT / UPDATE / DELETE, `$1` prepared, JOIN (INNER/LEFT), GROUP BY / HAVING, window (`OVER`), expressions, `CASE`, `CAST`, dual (`SELECT` without FROM); decimal `SUM`/`AVG`/`MIN`/`MAX` + HAVING + window over `NUMERIC`, unquoted NUMERIC literals (`12.50`), `to_char` (incl. month/day names + AM/PM) |
+| **SQL** | SELECT / INSERT / UPDATE / DELETE, `$1` prepared, JOIN (INNER/LEFT), GROUP BY / HAVING, window (`OVER`, incl. `LAG`/`LEAD`/`NTILE`, named `WINDOW`, `ROWS` frames), expressions, `CASE`, `CAST`, dual (`SELECT` without FROM); decimal `SUM`/`AVG`/`MIN`/`MAX` + HAVING + window over `NUMERIC`, unquoted NUMERIC literals (`12.50`), `to_char` (incl. month/day names + AM/PM) |
 | **DDL** | Multi-database (`CREATE`/`DROP`/`USE`), tables (PK required), ALTER add/rename/drop column, indexes (single- & multi-column, `UNIQUE`), `IF [NOT] EXISTS`, `TRUNCATE`, `SHOW` / `DESCRIBE` |
 | **Integrity** | `NOT NULL` / `DEFAULT`, `SERIAL` / `BIGSERIAL`, `CHECK`, `REFERENCES` / foreign keys (`ON DELETE` NO ACTION / RESTRICT / CASCADE / SET NULL), `UNIQUE` (multi-column) |
 | **Txns** | `BEGIN` / `COMMIT` / `ROLLBACK`, session write buffer + LSN, SERIALIZABLE / READ COMMITTED, crash → clean rollback |
@@ -193,7 +194,7 @@ bash bench/boila/run_modality_benches.sh all
 |----------|----------|
 | **[docs/](docs/README.md)** | Getting started, SQL, HTTP, PG wire, config, security, ops |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Layers, concurrency, v1 bounds |
-| [PLAN.md](PLAN.md) | P0–P21 with measured gates |
+| [PLAN.md](PLAN.md) | P0–P25 with measured gates |
 | [gaps.md](gaps.md) | Honest residuals |
 | [kimi-deps.md](kimi-deps.md) | Import-discipline notes |
 

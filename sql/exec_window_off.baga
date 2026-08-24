@@ -1,0 +1,33 @@
+// exec_window_off.baga — LAG/LEAD/NTILE helpers (filesize split from
+// exec_window.baga). LAG=9 LEAD=10 NTILE=11.
+import "../core/value.baga"
+import "ast.baga"
+
+fn boila_win_off_val(kind: i64, rows: Vec<Vec<BoilaVal>>, r: i64, p0: i64, p1: i64, ax: i64, off: i64, def: BoilaVal) -> BoilaVal {
+    let mut src = r
+    if kind == 9 { src = r - off }
+    if kind == 10 { src = r + off }
+    if src >= p0 && src < p1 {
+        let row = vec_get(rows, src)
+        if ax >= 0 && ax < vec_len(row) {
+            return vec_get(row, ax)
+        }
+        return boila_val_null()
+    }
+    return def
+}
+
+// PG: extra rows go to earlier buckets. n > N → one row per bucket 1..N.
+fn boila_win_ntile(n: i64, i: i64, npart: i64) -> i64 {
+    if n <= 0 || npart <= 0 { return 1 }
+    let sz = npart / n
+    let extra = npart - sz * n
+    if sz == 0 {
+        return i + 1
+    }
+    let big = sz + 1
+    if i < extra * big {
+        return i / big + 1
+    }
+    return extra + (i - extra * big) / sz + 1
+}

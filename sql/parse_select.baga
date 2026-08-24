@@ -235,6 +235,24 @@ fn boila_parse_select(l: BoilaLex) -> BoilaParseSel {
         i = hv.pos
     }
 
+    // P24: WINDOW name AS ( spec ) [, …]
+    let mut wnames: Vec<str> = vec_new()
+    let mut wspecs: Vec<BoilaWin> = vec_new()
+    if tok_kw(boila_ps_tok(l, i), "window") == 1 {
+        let nw = boila_parse_named_windows(l, i)
+        if nw.ok == 0 {
+            return boila_ps_fail(nw.err, nw.state)
+        }
+        wnames = nw.names
+        wspecs = nw.specs
+        i = nw.pos
+    }
+    let wr = boila_sel_resolve_windows(sel, wnames, wspecs)
+    if wr.ok == 0 {
+        return boila_ps_fail(wr.err, wr.state)
+    }
+    sel = wr.sel
+
     // ORDER BY
     if tok_kw(boila_ps_tok(l, i), "order") == 1 {
         if tok_kw(boila_ps_tok(l, i + 1), "by") != 1 { return boila_ps_fail("очаквах BY след ORDER", "42601") }

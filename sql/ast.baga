@@ -40,19 +40,33 @@ fn boila_hav_bin(kind: i64, a: i64, b: i64) -> BoilaHavNode {
 }
 
 // P13 window: kind 0=none, 1=row_number, 2=rank, 3=dense_rank,
-// 4=sum, 5=avg, 6=count, 7=min, 8=max. col holds the agg argument.
+// 4=sum, 5=avg, 6=count, 7=min, 8=max, 9=lag, 10=lead, 11=ntile.
+// col holds the agg/offset argument. off/def are LAG/LEAD/NTILE
+// (ignored by spec_eq — OVER must still match across items).
+// ref: OVER name (empty = inline spec); resolved after WINDOW clause.
 struct BoilaWin {
     kind: i64,
     part: Vec<str>,
     ord: Vec<str>,
-    desc: Vec<i64>
+    desc: Vec<i64>,
+    off: i64,
+    def: BoilaVal,
+    ref: str,
+    // P25 frame: fk 0=default RANGE UP-CR, 1=ROWS, 2=RANGE.
+    // fs/fe: 0=UNBOUNDED PRECEDING, 1=n PRECEDING, 2=CURRENT ROW,
+    // 3=n FOLLOWING, 4=UNBOUNDED FOLLOWING. na/nb = n for start/end.
+    fk: i64,
+    fs: i64,
+    fe: i64,
+    na: i64,
+    nb: i64
 }
 
 fn boila_win_none() -> BoilaWin {
     let p: Vec<str> = vec_new()
     let o: Vec<str> = vec_new()
     let d: Vec<i64> = vec_new()
-    return BoilaWin { kind: 0, part: p, ord: o, desc: d }
+    return BoilaWin { kind: 0, part: p, ord: o, desc: d, off: 1, def: boila_val_null(), ref: "", fk: 0, fs: 0, fe: 2, na: 0, nb: 0 }
 }
 
 struct BoilaSelItem {

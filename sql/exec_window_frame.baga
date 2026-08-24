@@ -1,0 +1,103 @@
+// exec_window_frame.baga — P25 ROWS/RANGE per-row aggregate over a frame.
+import "../core/value.baga"
+import "../core/numeric.baga"
+import "ast.baga"
+
+fn boila_win_use_peer(w: BoilaWin) -> i64 {
+    if w.fk <= 0 { return 1 }
+    if w.fk == 2 && w.fs == 0 && w.fe == 2 { return 1 }
+    return 0
+}
+
+fn boila_win_frame_idx(k: i64, n: i64, r: i64, p0: i64, p1: i64) -> i64 {
+    if p1 <= p0 { return p0 }
+    if k == 0 { return p0 }
+    if k == 2 { return r }
+    if k == 4 { return p1 - 1 }
+    if k == 1 {
+        let x = r - n
+        if x < p0 { return p0 }
+        return x
+    }
+    let x = r + n
+    if x >= p1 { return p1 - 1 }
+    if x < p0 { return p0 }
+    return x
+}
+
+fn boila_win_frame_val(kind: i64, isnum: i64, rows: Vec<Vec<BoilaVal>>, r: i64, p0: i64, p1: i64, ax: i64, w: BoilaWin) -> BoilaVal {
+    let lo = boila_win_frame_idx(w.fs, w.na, r, p0, p1)
+    let hi = boila_win_frame_idx(w.fe, w.nb, r, p0, p1)
+    if lo > hi {
+        if kind == 6 { return boila_val_i64(0) }
+        return boila_val_null()
+    }
+    let mut acc: i64 = 0
+    let mut cnt: i64 = 0
+    let mut first: i64 = 1
+    let mut nacc = bytes_new(0)
+    let mut i = lo
+    while i <= hi {
+        let row = vec_get(rows, i)
+        let mut v = boila_val_null()
+        if ax >= 0 && ax < vec_len(row) {
+            v = vec_get(row, ax)
+        } else {
+            if kind == 6 { v = boila_val_i64(1) }
+        }
+        if isnum == 1 && (kind == 4 || kind == 5 || kind == 7 || kind == 8) {
+            if v.tag != boila_v_null() {
+                if bytes_len(nacc) == 0 {
+                    nacc = v.b
+                } else {
+                    if kind == 7 {
+                        if boila_num_payload_cmp(v.b, nacc) < 0 { nacc = v.b }
+                    } else {
+                        if kind == 8 {
+                            if boila_num_payload_cmp(v.b, nacc) > 0 { nacc = v.b }
+                        } else {
+                            nacc = boila_num_add_kb(nacc, v.b)
+                        }
+                    }
+                }
+                cnt = cnt + 1
+            }
+        } else {
+            if kind == 6 {
+                if v.tag != boila_v_null() {
+                    acc = acc + 1
+                    cnt = cnt + 1
+                }
+            } else {
+                if v.tag != boila_v_null() {
+                    let x = v.i
+                    if kind == 4 || kind == 5 { acc = acc + x }
+                    if kind == 7 {
+                        if first == 1 { acc = x } else { if x < acc { acc = x } }
+                    }
+                    if kind == 8 {
+                        if first == 1 { acc = x } else { if x > acc { acc = x } }
+                    }
+                    cnt = cnt + 1
+                    first = 0
+                }
+            }
+        }
+        i = i + 1
+    }
+    if isnum == 1 && (kind == 4 || kind == 5 || kind == 7 || kind == 8) {
+        if bytes_len(nacc) == 0 { return boila_val_null() }
+        if kind == 5 {
+            if cnt == 0 { return boila_val_null() }
+            return boila_val_num_bytes(boila_num_div_i64_kb(nacc, cnt))
+        }
+        return boila_val_num_bytes(nacc)
+    }
+    if kind == 5 {
+        if cnt == 0 { return boila_val_null() }
+        return boila_val_i64(acc / cnt)
+    }
+    if kind == 6 { return boila_val_i64(acc) }
+    if cnt == 0 { return boila_val_null() }
+    return boila_val_i64(acc)
+}

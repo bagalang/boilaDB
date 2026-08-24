@@ -138,7 +138,7 @@
   с `$N` slots; Bind попълва; Execute без re-parse (DML params = text).
 - **W5/W3 (post-P11):** Describe metadata + typed OIDs; Execute OIDs
   residual text.
-- Ревизии (честно): concurrency residual (W1/P11); без SCRAM/TLS (W6).
+- Ревизии (честно): concurrency residual (W1/P11); SCRAM — P15; TLS — P22-3.
 
 ## P7 — fts/ модал
 - Реализирано: `fts/tokenizer.baga` (ASCII case folding, UTF-8 едно към
@@ -265,10 +265,9 @@
   Файлове: `sql/parse_window.baga`, `sql/exec_window.baga`.
 - **Гейт (минат):** `tests/boila_window_test` — row_number по dept;
   RANK/DENSE_RANK при равен sal; running SUM (двамата с 20 виждат 40);
-  `COUNT(*) OVER ()`; ROWS BETWEEN → 0A000; различни OVER spec →
-  0A000; restart.
-- Residual: един OVER spec на заявка; няма named `WINDOW w AS`;
-  няма `NTILE`/`LAG`/`LEAD`; window agg с израз (`sum(sal+1)`) —
+  `COUNT(*) OVER ()`; различни OVER spec → 0A000; restart.
+- Residual: един OVER spec на заявка; LAG/LEAD — P23; NTILE/named
+  WINDOW — P24; frames — P25; window agg с израз (`sum(sal+1)`) —
   0A000; няма mix с GROUP BY.
 
 ## P14 — COPY
@@ -298,7 +297,7 @@
 - **Гейт (минат):** `tests/boila_scram_test` — verifier + handshake
   срещу pgbaga `scram_build_final`; live `pg_connect` SELECT 1;
   грешна парола `ok=0`. `boila_acl_test` зелен (s1 + SET ROLE).
-- Residual: няма channel binding (`-PLUS`); няма TLS; няма MD5;
+- Residual: няма channel binding (`-PLUS`); няма MD5; TLS — P22-3;
   token-only SCRAM прави ephemeral verifier.
 
 ## P16 — Compaction filter за MVCC GC
@@ -582,6 +581,45 @@ new `std/net` TLS 1.3 **server** handshake (`tls_accept`).
   (`run_tests.sh`, openssl-provisioned cert); plaintext regressions
   `tests/boila_scram_test` ('N' fallback) and `tests/api_test`
   (real PostgreSQL, no `PGSSLMODE`).
+
+## P23 — LAG / LEAD
+
+Closes the P13 ranking residual for offset window functions. Frame
+clauses stay 0A000 (NTILE / named WINDOW — P24).
+
+- `LAG(col [, offset [, default]]) OVER (…)` / `LEAD(…)` — offset is a
+  non-negative integer literal (default 1); out-of-partition rows yield
+  `default` or NULL. Offset is in **rows** of the ordered partition, not
+  peer groups (unlike running SUM). Same OVER-spec rule as P13.
+- Files: `sql/parse_window.baga`, `sql/exec_window.baga`, `sql/ast.baga`
+  (`BoilaWin.off` / `.def`).
+- **Gate:** `tests/boila_window_test` LAG/LEAD + offset/default + text
+  + mix with ROW_NUMBER; existing window checks green.
+
+## P24 — NTILE + named WINDOW
+
+- `NTILE(n) OVER (…)` — `n ≥ 1` integer literal; extra rows go to
+  earlier buckets (PG). `$N` / `n < 1` → `0A000` / `22023`.
+- `OVER w` + `WINDOW w AS ( [PARTITION BY …] [ORDER BY …] )` — one
+  named spec, reused by several functions (same OVER-spec rule).
+  Unknown name → `42703`; duplicate name → `42710`.
+- Files: `sql/parse_window.baga`, `sql/parse_select.baga`,
+  `sql/exec_window.baga`, `sql/exec_window_off.baga`.
+- **Gate:** `tests/boila_window_test` ntile_* / named_*.
+- Residual: no `WINDOW` inheritance (`w AS (w1 ORDER BY …)`).
+
+## P25 — ROWS / RANGE frames
+
+- `ROWS BETWEEN start AND end` and abbreviated `ROWS start`.
+  Bounds: `UNBOUNDED PRECEDING|FOLLOWING`, `CURRENT ROW`,
+  `n PRECEDING|FOLLOWING` (`n ≥ 0`). Ranking / LAG / LEAD / NTILE
+  ignore the frame (PG).
+- `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW` = default peer
+  path; `AND UNBOUNDED FOLLOWING` = whole partition. `RANGE n
+  PRECEDING` and `GROUPS` stay `0A000`.
+- Files: `sql/parse_window_frame.baga`, `sql/exec_window_frame.baga`.
+- **Gate:** `tests/boila_window_test` rows_run_* / rows_1prec_* /
+  range_all_* / groups_0A000 / range_off_0A000.
 
 ## Рискове
 - **`go/chan` само `i64`** → комуникация с shard нишките през канали +

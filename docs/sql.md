@@ -47,7 +47,9 @@ referencing child FK: RESTRICT rejects with `23503`, CASCADE deletes
 the child rows, SET NULL nulls the child FK column. Cascade is
 single-level (no recursion through chained FKs).
 
-**Not yet:** arrays, usable `FLOAT8` columns, `ON UPDATE` FK actions.
+**Not yet:** arrays, usable `FLOAT8` columns, `ON UPDATE` FK actions,
+`GROUPS` frames, `RANGE n PRECEDING/FOLLOWING`.
+
 `NUMERIC` / `DECIMAL` are unconstrained; `NUMERIC(p[,s])` (p 1..28,
 s 0..p) rounds on DML (`22003` if more than p digits). Unquoted
 decimal literals (`12.50`) are NUMERIC in VALUES / SET / DEFAULT /
@@ -191,14 +193,22 @@ structural predicate): arithmetic, `||`, functions, `CASE`, `CAST`/`::`,
 `AND`/`OR`/`NOT`, `IS [NOT] DISTINCT FROM`. Top-level `OR` of mixed
 columns is a seq-filter.
 
-**Window (P13):** `ROW_NUMBER()` / `RANK()` / `DENSE_RANK()` /
-`SUM`/`AVG`/`COUNT`/`MIN`/`MAX(col)` `OVER ( [PARTITION BY cols]
-[ORDER BY cols [ASC|DESC]] )`. Default frame = RANGE UNBOUNDED
-PRECEDING (ties share the running agg). One OVER spec per query.
-`ROWS`/`RANGE`/`GROUPS` → `0A000`. No `LAG`/`LEAD`/`NTILE`, no
-named `WINDOW`. `SUM`/`AVG(col)` over a NUMERIC column are
-decimal-exact and return NUMERIC (P21-5); window `MIN`/`MAX` over
-NUMERIC are still i64-only.
+**Window (P13, P21-5, P23–P25):** `ROW_NUMBER()` / `RANK()` /
+`DENSE_RANK()` / `NTILE(n)` / `SUM`/`AVG`/`COUNT`/`MIN`/`MAX(col)` /
+`LAG(col [, offset [, default]])` / `LEAD(col [, offset [, default]])`
+`OVER ( [PARTITION BY cols] [ORDER BY cols [ASC|DESC]]
+[ROWS|RANGE frame] )` or `OVER w` with `WINDOW w AS ( … )`. Default
+frame = RANGE UNBOUNDED PRECEDING AND CURRENT ROW (ties share the
+running agg; LAG/LEAD/NTILE/RANK ignore the frame). `ROWS BETWEEN
+start AND end` with `UNBOUNDED PRECEDING|FOLLOWING`, `CURRENT ROW`,
+`n PRECEDING|FOLLOWING`. Abbreviated `ROWS start` = `BETWEEN start
+AND CURRENT ROW`. `RANGE` only `UNBOUNDED PRECEDING` … `CURRENT ROW`
+(same as default) or `UNBOUNDED FOLLOWING` (whole partition);
+`RANGE n PRECEDING` → `0A000`. `GROUPS` → `0A000`. One OVER spec per
+query. `NTILE(n)` — `n ≥ 1`; extra rows go to earlier buckets.
+LAG/LEAD offset is a non-negative integer literal. `SUM`/`AVG`/`MIN`/
+`MAX(col)` over NUMERIC are decimal-exact. LAG/LEAD take the source
+column type.
 
 **COPY (P14):** `COPY t [(cols)] FROM STDIN | TO STDOUT`
 `[WITH (FORMAT text|csv)]`. Text is tab-separated (`\N` null, `\.`

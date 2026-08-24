@@ -32,6 +32,17 @@ fn boila_env_or(name: str, dflt: str) -> str !IO !Par {
     return v
 }
 
+fn boila_port_parse(raw: str, def: i64) -> i64 {
+    if raw == "" {
+        return def
+    }
+    let p = parse_int(raw)
+    if p < 1 || p > 65535 {
+        return def
+    }
+    return p
+}
+
 fn boila_route_mt(pack: i64, txn: BoilaTxn, sess_db: str, guc: Map<str, str>, req: Request) -> BoilaHttpSql !IO !Time !Par {
     let method = http_method(req)
     let path = http_path_only(req)
@@ -220,7 +231,7 @@ fn boila_pool_handle(fd: i64, pack: i64) -> i64 !IO !Net !Time !Par !Random {
 
 fn main() -> i64 !Net !IO !Time !Par {
     let root = boila_env_or("BOILA_PATH", "/tmp/baga_boila")
-    let port = parse_int(boila_env_or("BOILA_PORT", "6570"))
+    let port = boila_port_parse(boila_env_or("BOILA_PORT", "6570"), 6570)
     let nshards = parse_int(boila_env_or("BOILA_SHARDS", "4"))
     let flush_at = parse_int(boila_env_or("BOILA_FLUSH_AT", "256"))
     let compact_at = parse_int(boila_env_or("BOILA_COMPACT_AT", "4"))

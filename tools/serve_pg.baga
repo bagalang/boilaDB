@@ -22,6 +22,17 @@ fn boila_env_or(name: str, dflt: str) -> str !IO !Par {
     return v
 }
 
+fn boila_port_parse(raw: str, def: i64) -> i64 {
+    if raw == "" {
+        return def
+    }
+    let p = parse_int(raw)
+    if p < 1 || p > 65535 {
+        return def
+    }
+    return p
+}
+
 fn boila_pg_conn_mt(ctx: i64) -> i64 !IO !Net !Time !Par !Random {
     let fd = cell2_0(ctx)
     let pack = cell2_1(ctx)
@@ -43,7 +54,7 @@ fn boila_pool_handle(fd: i64, pack: i64) -> i64 !IO !Net !Time !Par !Random {
 
 fn main() -> i64 !Net !IO !Time !Par !Random {
     let root = boila_env_or("BOILA_PATH", "/tmp/baga_boila")
-    let port = parse_int(boila_env_or("BOILA_PGPORT", "6575"))
+    let port = boila_port_parse(boila_env_or("BOILA_PGPORT", "6575"), 6575)
     let nshards = parse_int(boila_env_or("BOILA_SHARDS", "4"))
     let flush_at = parse_int(boila_env_or("BOILA_FLUSH_AT", "256"))
     let compact_at = parse_int(boila_env_or("BOILA_COMPACT_AT", "4"))

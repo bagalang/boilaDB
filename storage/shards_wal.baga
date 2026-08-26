@@ -11,8 +11,57 @@ import "rocksbaga/db/engine.baga"
 import "rocksbaga/db/engine_wal.baga"
 import "rocksbaga/db/shard.baga"
 import "rocksbaga/db/shard_ttl.baga"
+import "std/os/os.baga"
+import "std/time/time.baga"
 
 extern fn fdatasync(fd: i64) -> i64 !IO
+
+// P30: statements between fsync (default 1 = P27). 0 treated as 1.
+fn boila_sync_every() -> i64 !IO {
+    let e = env("BOILA_SYNC_EVERY")
+    if e == "" {
+        return 1
+    }
+    let n = parse_int(e)
+    if n < 1 {
+        return 1
+    }
+    return n
+}
+
+// P30: ms bucket for delayed fsync (default 0 = off; use BOILA_SYNC_EVERY).
+fn boila_commit_window_ms() -> i64 !IO {
+    let e = env("BOILA_COMMIT_WINDOW_MS")
+    if e == "" {
+        return 0
+    }
+    let n = parse_int(e)
+    if n < 0 {
+        return 0
+    }
+    return n
+}
+
+fn boila_wal_maybe_fsync(db: LsmDB) -> LsmDB !IO !Time {
+    if db.wal_fd < 0 {
+        return db
+    }
+    let w = boila_commit_window_ms()?
+    if w > 0 {
+        let b = time_now_ms()? / w
+        if db.since_sync != b {
+            fdatasync(db.wal_fd)?
+            db.since_sync = b
+        }
+        return db
+    }
+    db.since_sync = db.since_sync + 1
+    if db.since_sync >= boila_sync_every()? {
+        fdatasync(db.wal_fd)?
+        db.since_sync = 0
+    }
+    return db
+}
 
 fn boila_stmt_all_mask(n: i64) -> i64 {
     if n >= 63 {
@@ -49,7 +98,7 @@ fn boila_stmt_begin(s: BoilaStore) -> BoilaStore !Par {
     return boila_stmt_begin_mask(s, boila_stmt_all_mask(s.n))?
 }
 
-fn boila_stmt_commit(s: BoilaStore) -> BoilaStore !IO !Par {
+fn boila_stmt_commit(s: BoilaStore) -> BoilaStore !IO !Time !Par {
     return boila_stmt_commit_mask(s, boila_stmt_all_mask(s.n))?
 }
 
@@ -61,7 +110,6 @@ fn boila_stmt_begin_mask(s: BoilaStore, mask: i64) -> BoilaStore !Par {
             if boila_stmt_has(mask, i) == 1 {
                 let mut db = vec_get(c.shards, i)
                 db.sync_every = 1000000000
-                db.since_sync = 0
                 db = lsm_wal_group_begin(db)
                 vec_set(c.shards, i, db)
             }
@@ -76,7 +124,6 @@ fn boila_stmt_begin_mask(s: BoilaStore, mask: i64) -> BoilaStore !Par {
             let mu = boila_shard_lock(s, i)?
             let mut db = map_get(dbs, i)
             db.sync_every = 1000000000
-            db.since_sync = 0
             db = lsm_wal_group_begin(db)
             map_set(dbs, i, db)
             mutex_unlock(mu)
@@ -86,7 +133,7 @@ fn boila_stmt_begin_mask(s: BoilaStore, mask: i64) -> BoilaStore !Par {
     return s
 }
 
-fn boila_stmt_commit_mask(s: BoilaStore, mask: i64) -> BoilaStore !IO !Par {
+fn boila_stmt_commit_mask(s: BoilaStore, mask: i64) -> BoilaStore !IO !Time !Par {
     if s.dbs_h == 0 {
         let mut c = s.c
         let mut i: i64 = 0
@@ -94,11 +141,8 @@ fn boila_stmt_commit_mask(s: BoilaStore, mask: i64) -> BoilaStore !IO !Par {
             if boila_stmt_has(mask, i) == 1 {
                 let mut db = vec_get(c.shards, i)
                 db = lsm_wal_group_end(db)?
-                if db.wal_fd >= 0 {
-                    fdatasync(db.wal_fd)?
-                }
+                db = boila_wal_maybe_fsync(db)?
                 db.sync_every = 1
-                db.since_sync = 0
                 vec_set(c.shards, i, db)
             }
             i = i + 1
@@ -112,11 +156,8 @@ fn boila_stmt_commit_mask(s: BoilaStore, mask: i64) -> BoilaStore !IO !Par {
             let mu = boila_shard_lock(s, i)?
             let mut db = map_get(dbs, i)
             db = lsm_wal_group_end(db)?
-            if db.wal_fd >= 0 {
-                fdatasync(db.wal_fd)?
-            }
+            db = boila_wal_maybe_fsync(db)?
             db.sync_every = 1
-            db.since_sync = 0
             map_set(dbs, i, db)
             mutex_unlock(mu)
         }

@@ -5,6 +5,14 @@ V = value/codec/vector, K = key/scan, S = storage, M = metrics/monitoring,
 H = HTTP/API, Q = SQL (от P1), C = cache/planner, A = агрегати,
 T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
 
+## P30 — delayed fsync (opened 2026-08-26)
+
+- **W9 — (FIXED P30, opt-in) INSERT 5k ops/s class.** `BOILA_SYNC_EVERY`
+  (default 1) and `BOILA_COMMIT_WINDOW_MS` (default 0). Harness
+  EVERY=64: insert @1k **5427 ops/s**, @10k **3134**. Residual: default
+  stays 1 fsync/stmt; crash in a window can lose the tail; no
+  cross-statement WAL BATCH.
+
 ## P29 — FK seek (opened 2026-08-26)
 
 - **R1b — (FIXED P29) FK parent/child lookup.** Child INSERT/UPDATE:

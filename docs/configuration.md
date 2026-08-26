@@ -45,6 +45,8 @@ the worker for the life of the connection.
 | `BOILA_BUDGET_MS` | `5000` | `57014` | Wall deadline (cooperative tick every 64 keys). `0` = already expired (tests) |
 | — | 100000 | `54000` | `max_scan` / `max_rows` (compile-time constants in `core/budget.baga`) |
 | `BOILA_TXN_MAX` | `100000` | `54000` | Max distinct keys in a `BEGIN` buffer. `0` = unlimited |
+| `BOILA_SYNC_EVERY` | `1` | — | Fsync WAL every N statement commits (P30). `1` = durable each auto-commit. Bulk load: `64` / `256`. Close still fsyncs. |
+| `BOILA_COMMIT_WINDOW_MS` | `0` | — | If > 0, fsync at most once per this many ms (bucket). Overrides the count. Crash can lose the current window. |
 | `BOILA_JOIN_NL_MAX` | `8` | — | Nested-loop join if outer ≤ this; else hash join |
 
 Budget is **not** a preemptive kill inside a rocksbaga GET.

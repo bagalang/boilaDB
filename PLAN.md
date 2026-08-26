@@ -693,6 +693,23 @@ Typical FKs point at a PRIMARY KEY.
 - Residual: discovering which tables reference the parent is still a
   catalog name scan; unindexed FK columns still fetch_all.
 
+## P30 — delayed fsync (commit window)
+
+Default remains **one fsync per auto-commit** (accounting). Bulk load
+sets `BOILA_SYNC_EVERY=N` (fsync every N statement commits) or
+`BOILA_COMMIT_WINDOW_MS` (at most one fsync per ms bucket). WAL is
+still `pwrite`-d each statement; only `fdatasync` is deferred. Close
+always fsyncs (`lsm_close`).
+
+- Files: `storage/shards_wal.baga` (`boila_wal_maybe_fsync`).
+- **Gate:** `tests/boila_sync_test` (80 INSERT + close + reopen = 80)
+  with default and `BOILA_SYNC_EVERY=64`; `boila_chaos_test` unchanged
+  (default every=1). Harness insert @10k with EVERY=64: **3134 ops/s**
+  (was ~700).
+- Residual: kill-9 during a window can lose un-fsynced statements;
+  10k insert still slows vs 1k (compaction). No group-WAL across
+  statements (each stmt still its own BATCH).
+
 ## Рискове
 - **`go/chan` само `i64`** → комуникация с shard нишките през канали +
   cell2 пакети (доказан модел: rocksbaga MT `lsm_mt_*`, queuebaga).

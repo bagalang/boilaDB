@@ -285,7 +285,8 @@ cell2 пакети (доказаният модел на rocksbaga MT и queueba
   При високо натоварване това е водещият лост — fsync-ът, не CPU-то.
   P27: auto-commit statement fsync-ва само мръсните шардове; LSN е
   per-shard, така едноредовият INSERT е **един** fsync (не N).
-  Междузаявлен `commit_window_ms` още не е реализиран.
+  P30: `BOILA_SYNC_EVERY` / `BOILA_COMMIT_WINDOW_MS` отлагат fsync-а
+  (default = всеки statement; close винаги fsync-ва).
 - **Commit sequencer:** издава LSN-и за multi-shard commit-и; едно-shard
   commit-и (масовият случай) не го чакат.
 - **MVCC четене:** worker-ите четат без ключалки върху snapshot LSN;

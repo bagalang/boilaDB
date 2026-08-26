@@ -36,7 +36,7 @@ the SQL flagship on top of the RocksDB-class engine:
 
 ## Status
 
-Phases **P0–P29** landed. Core + modalities (NUMERIC, window, COPY,
+Phases **P0–P30** landed. Core + modalities (NUMERIC, window, COPY,
 SCRAM, filter-GC, serializable, local FDW, raft replica), then the
 application-ready SQL surface — P20: UNIQUE indexes, NOT NULL / DEFAULT,
 SERIAL / BIGSERIAL, decimal SUM/AVG, `to_char`; and P21 schema
@@ -56,7 +56,7 @@ shared lock; schema DDL is exclusive per database. PG wire TLS 1.3 when
 | HTTP | `/sql` `/health` `/ready` `/metrics` on **:6570** |
 | ORM | [ormbaga](../ormbaga/README.md) **36/36** vs `serve_pg` (with and without `--rc`) |
 | Point @10k | 156k ops/s |
-| Insert @10k | 678 ops/s (2 shards) / 724 (4 shards) — P27 |
+| Insert @10k | 678 ops/s durable (P27); **3134** with `BOILA_SYNC_EVERY=64` (P30) |
 | Mix 80/20 @10k | 1.6k ops/s (2 shards) / 2.2k (4 shards) |
 | 1M INSERT | 169 s, 1.35 GB RSS, DURABLE OK |
 
@@ -194,7 +194,7 @@ bash bench/boila/run_modality_benches.sh all
 |----------|----------|
 | **[docs/](docs/README.md)** | Getting started, SQL, HTTP, PG wire, config, security, ops |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Layers, concurrency, v1 bounds |
-| [PLAN.md](PLAN.md) | P0–P29 with measured gates |
+| [PLAN.md](PLAN.md) | P0–P30 with measured gates |
 | [gaps.md](gaps.md) | Honest residuals |
 | [kimi-deps.md](kimi-deps.md) | Import-discipline notes |
 

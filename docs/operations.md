@@ -36,6 +36,9 @@ GET).
 - P27: `fdatasync` only shards that the statement wrote. The LSN
   counter is stored on those shards (not a hashed extra WAL). A
   single-row INSERT pays one fsync regardless of `BOILA_SHARDS`.
+- P30: `BOILA_SYNC_EVERY` (default 1) and `BOILA_COMMIT_WINDOW_MS`
+  (default 0) defer that fsync for bulk load. Close still fsyncs.
+  Crash during a window can lose the un-fsynced tail.
 - Kill before `COMMIT` → empty storage (nothing durable).
 - Secondary indexes live on the **same shard** as the row (same WAL
   batch). No index drift after crash.

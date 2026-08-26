@@ -28,6 +28,7 @@ import "../core/row.baga"
 import "../storage/shards.baga"
 import "../txn/mvcc.baga"
 import "exec_drop.baga"
+import "exec_sql_point.baga"
 import "exec_show.baga"
 import "std/str/str.baga"
 
@@ -66,6 +67,7 @@ import "../storage/shards.baga"
 import "../index/secondary.baga"
 import "../txn/mvcc.baga"
 import "exec_drop.baga"
+import "exec_sql_point.baga"
 import "exec_show.baga"
 import "exec_copy.baga"
 import "exec_vacuum.baga"
@@ -82,164 +84,6 @@ fn boila_exec_sql(s: BoilaStore, txn: BoilaTxn, db: str, sql: str, pc: BoilaPlan
 // hit-ва. При hit се замества pk_eq/pk_lo/pk_hi в ЧАСТНО by-value копие
 // на плана (Baga struct = C value; кешираната persist версия не се пипа —
 // няма cross-worker race).
-struct BoilaShapeKey {
-    key: str,
-    nph: i64,
-    tok_ix: i64
-}
-
-fn boila_shape_key(lx: BoilaLex) -> BoilaShapeKey {
-    let mut key = ""
-    let mut nph: i64 = 0
-    let mut tok_ix: i64 = 0 - 1
-    let mut i: i64 = 0
-    let n = vec_len(lx.toks)
-    while i < n {
-        let tk = vec_get(lx.toks, i)
-        let mut islit = false
-        if tk.kind == tok_num() || tk.kind == tok_str() || tk.kind == tok_dec() {
-            islit = true
-            if i > 0 {
-                let pv = vec_get(lx.toks, i - 1)
-                if tok_kw(pv, "limit") == 1 || tok_kw(pv, "offset") == 1 {
-                    islit = false
-                }
-            }
-        }
-        key = concat(key, chr(1))
-        if islit == true {
-            key = concat(key, "?")
-            if tok_ix < 0 {
-                tok_ix = i
-            }
-            nph = nph + 1
-        } else {
-            key = concat(key, tk.txt)
-        }
-        i = i + 1
-    }
-    return BoilaShapeKey { key: key, nph: nph, tok_ix: tok_ix }
-}
-
-fn boila_shape_val_eq(a: BoilaVal, b: BoilaVal) -> i64 {
-    if a.tag != b.tag { return 0 }
-    if a.i != b.i { return 0 }
-    if bytes_cmp(a.b, b.b) != 0 { return 0 }
-    return 1
-}
-
-// P42: compiled point path — SELECT <*|col,…> FROM t WHERE pk = <lit> [;].
-// Токен-ниво детекция (без parse + без generic exec): каталог от pc.tm,
-// един txn_get, проекция директно в BoilaResult. hit=0 при всяко
-// отклонение от формата — caller пада на generic пътя с пълен parse
-// (идентично поведение, вкл. същите съобщения за грешка).
-struct BoilaPointHit {
-    hit: i64,
-    out: BoilaSqlOut
-}
-
-fn boila_try_exec_point(s: BoilaStore, txn: BoilaTxn, pc: BoilaPlanCache, lx: BoilaLex) -> BoilaPointHit !IO !Time !Par {
-    let miss = BoilaPointHit { hit: 0, out: boila_sql_fail(s, txn, pc, "", "") }
-    // t0 ("select") вече е проверен от caller-а
-    let mut i: i64 = 1
-    let items: Vec<str> = vec_new()
-    let mut star: i64 = 0
-    let mut scanning = true
-    while scanning {
-        let tk = boila_ps_tok(lx, i)
-        if tk.kind == tok_star() && star == 0 && vec_len(items) == 0 {
-            star = 1
-            i = i + 1
-        } else {
-            if tk.kind == tok_ident() {
-                vec_push(items, tk.txt)
-                i = i + 1
-            } else {
-                return miss
-            }
-        }
-        let sep = boila_ps_tok(lx, i)
-        if sep.kind == tok_comma() {
-            if star == 1 {
-                return miss          // "*, col" — generic път
-            }
-            i = i + 1
-        } else {
-            scanning = false
-        }
-    }
-    if tok_kw(boila_ps_tok(lx, i), "from") == 0 { return miss }
-    let tt = boila_ps_tok(lx, i + 1)
-    if tt.kind != tok_ident() { return miss }
-    if tok_kw(boila_ps_tok(lx, i + 2), "where") == 0 { return miss }
-    let tc = boila_ps_tok(lx, i + 3)
-    if tc.kind != tok_ident() { return miss }
-    let teq = boila_ps_tok(lx, i + 4)
-    if teq.kind != tok_op() || teq.txt != "=" { return miss }
-    let lit = boila_ps_literal(lx, i + 5)
-    if lit.ok == 0 || lit.param != 0 { return miss }
-    if lit.v.tag == boila_v_null() { return miss }   // SQL 3VL — generic път
-    let tend = boila_ps_tok(lx, i + 6)
-    if tend.kind != tok_eof() && tend.kind != tok_semi() { return miss }
-    if tend.kind == tok_semi() && boila_ps_tok(lx, i + 7).kind != tok_eof() { return miss }
-    // --- изпълнение ---
-    let ct = boila_pc_cat(pc, s, txn, tt.txt)?
-    let mut s2 = ct.s
-    if ct.ok == 0 {
-        return BoilaPointHit { hit: 1, out: boila_sql_fail(s2, txn, pc, ct.err, ct.state) }
-    }
-    let t = ct.table
-    if t.pk_idx < 0 || t.pk_idx >= vec_len(t.cols) { return miss }
-    let pkcol = vec_get(t.cols, t.pk_idx)
-    if tc.txt != pkcol.name { return miss }
-    let lv = boila_lit_coerce(pkcol.typ, lit.v)
-    if boila_pk_lit_ok(pkcol.typ, lv) == 0 {
-        return BoilaPointHit { hit: 1, out: boila_sql_fail(s2, txn, pc, "литералът в = не съответства на типа на PRIMARY KEY", "42804") }
-    }
-    let pkenc = boila_val_enc_typed(pkcol.typ, lv)
-    let g = boila_txn_get(s2, txn, t.id, pkenc)?
-    s2 = g.s
-    let res = boila_result_empty()
-    let proj: Vec<i64> = vec_new()
-    if star == 1 {
-        let mut ci: i64 = 0
-        while ci < vec_len(t.cols) {
-            let cd = vec_get(t.cols, ci)
-            boila_result_add_col(res, cd.name, cd.typ)
-            vec_push(proj, ci)
-            ci = ci + 1
-        }
-    } else {
-        let mut ii: i64 = 0
-        while ii < vec_len(items) {
-            let cix = boila_col_idx(t, vec_get(items, ii))
-            if cix < 0 {
-                return BoilaPointHit { hit: 1, out: boila_sql_fail(s2, txn, pc, concat("колона '", concat(vec_get(items, ii), "' не съществува")), "42703") }
-            }
-            let cd = vec_get(t.cols, cix)
-            boila_result_add_col(res, cd.name, cd.typ)
-            vec_push(proj, cix)
-            ii = ii + 1
-        }
-    }
-    if g.found == 1 {
-        let row = boila_row_dec(g.row)
-        let out_r: Vec<BoilaVal> = vec_new()
-        let mut pi: i64 = 0
-        while pi < vec_len(proj) {
-            let cix2 = vec_get(proj, pi)
-            if cix2 < vec_len(row) {
-                vec_push(out_r, vec_get(row, cix2))
-            } else {
-                vec_push(out_r, boila_val_null())
-            }
-            pi = pi + 1
-        }
-        vec_push(res.rows, out_r)
-    }
-    return BoilaPointHit { hit: 1, out: BoilaSqlOut { s: s2, txn: txn, pc: pc, ok: 1, err: "", state: "", kind: 1, res: res, id: 0 } }
-}
-
 fn boila_exec_sql_guc(s: BoilaStore, txn: BoilaTxn, db: str, sql: str, pc: BoilaPlanCache, guc: Map<str, str>) -> BoilaSqlOut !IO !Time !Par {
     return boila_exec_sql_mu(s, txn, db, sql, pc, 0, guc)?
 }

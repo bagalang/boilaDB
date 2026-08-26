@@ -3,6 +3,7 @@ import "token.baga"
 import "lexer.baga"
 import "parse_ddl.baga"
 import "../catalog/acl.baga"
+import "../catalog/drop.baga"
 import "std/str/str.baga"
 
 struct BoilaParseUser {

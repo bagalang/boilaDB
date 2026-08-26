@@ -29,6 +29,7 @@ import "../catalog/schema.baga"
 import "../txn/mvcc.baga"
 import "std/str/str.baga"
 import "std/bytes/bytes.baga"
+import "serve_mt_util.baga"
 
 fn boila_mt_seed_srv() -> BoilaServer {
     let names: Vec<str> = vec_new()
@@ -61,131 +62,6 @@ fn boila_mt_new(srv: BoilaServer, max_conn: i64) -> i64 !Par {
     map_set(st, boila_st_http(), 0)
     map_set(st, boila_st_pg(), 0)
     return boila_mt_pack(mutex_new(), map_h(sm), map_h(dm), map_h(live), map_h(pcs), map_h(st))
-}
-
-// MEM-4: rocksbaga scan snapshotът (scan_keys, K3h) е per-request кеш в
-// ephemeral памет — след rewind на заявката би висял в shared store-а,
-// а при съвпадащ epoch следващ scan би го ПРОЧЕЛ (use-after-free).
-// Нулираме го преди write-back; следващият scan rebuild-ва (epoch = -1).
-// Празният vec е persist (~112 B само при scan-ната заявка — point
-// GET/DML hot path-ът не минава през тук).
-fn boila_store_snap_off(s: BoilaStore) -> BoilaStore {
-    let mut c = s.c
-    if vec_len(c.scan_keys) > 0 {
-        mem_persist_begin()
-        let sk: Vec<bytes> = vec_new()
-        mem_persist_end()
-        c.scan_keys = sk
-        c.scan_epoch = 0 - 1
-    }
-    let mut s2 = s
-    s2.c = c
-    return s2
-}
-
-fn boila_mt_srv_snap_off(srv: BoilaServer) -> BoilaServer {
-    let mut s2 = srv
-    s2.meta = boila_store_snap_off(s2.meta)
-    let mut i: i64 = 0
-    while i < vec_len(s2.stores) {
-        vec_set(s2.stores, i, boila_store_snap_off(vec_get(s2.stores, i)))
-        i = i + 1
-    }
-    return s2
-}
-
-// Write-back на singleton сървъра. Зад --rc map_set overwrite пуска
-// release_S на стария box (споделени names/stores/pc) → rc underflow.
-// In-place vec_push/vec_set вече са видими в картата; snap_off пак
-// чисти scan_keys на store vec-а. Leak-safe.
-fn boila_mt_srv_write(m: Map<i64, BoilaServer>, srv: BoilaServer) {
-    let s2 = boila_mt_srv_snap_off(srv)
-    if rc_on() {
-        return
-    }
-    map_set(m, 0, s2)
-}
-
-
-// P36: case-insensitive сравнение на span [i,e) с keyword — без concat.
-fn boila_kw_ci(sql: str, i: i64, e: i64, kw: str) -> i64 {
-    if e - i != len(kw) {
-        return 0
-    }
-    let mut j: i64 = 0
-    while j < len(kw) {
-        let mut c = char_at(sql, i + j)
-        if c >= 65 && c <= 90 {
-            c = c + 32
-        }
-        if c != char_at(kw, j) {
-            return 0
-        }
-        j = j + 1
-    }
-    return 1
-}
-
-// 1=db DDL, 2=USE, 3=schema DDL, 0=data (SELECT/DML/txn).
-// P36: span scan вместо char-concat по целия SQL (беше O(n²) низов churn).
-fn boila_mt_kw2(sql: str) -> i64 {
-    let n = len(sql)
-    let mut i: i64 = 0
-    let mut s1: i64 = 0 - 1
-    let mut e1: i64 = 0 - 1
-    let mut s2: i64 = 0 - 1
-    let mut e2: i64 = 0 - 1
-    let mut nw: i64 = 0
-    let mut scanning = true
-    while scanning && i <= n {
-        let mut cl: i64 = 32
-        if i < n {
-            cl = char_at(sql, i)
-        }
-        let mut alpha = false
-        if cl >= 65 && cl <= 90 {
-            alpha = true
-        }
-        if cl >= 97 && cl <= 122 {
-            alpha = true
-        }
-        if alpha {
-            if nw == 0 && s1 < 0 {
-                s1 = i
-            }
-            if nw == 1 && s2 < 0 {
-                s2 = i
-            }
-        } else {
-            if nw == 0 && s1 >= 0 {
-                e1 = i
-                nw = 1
-            } else {
-                if nw == 1 && s2 >= 0 {
-                    e2 = i
-                    nw = 2
-                    scanning = false
-                }
-            }
-        }
-        i = i + 1
-    }
-    if e1 < 0 {
-        return 0
-    }
-    if boila_kw_ci(sql, s1, e1, "use") == 1 {
-        return 2
-    }
-    if boila_kw_ci(sql, s1, e1, "create") == 1 || boila_kw_ci(sql, s1, e1, "drop") == 1 {
-        if s2 >= 0 && e2 >= 0 && boila_kw_ci(sql, s2, e2, "database") == 1 {
-            return 1
-        }
-        return 3
-    }
-    if boila_kw_ci(sql, s1, e1, "alter") == 1 || boila_kw_ci(sql, s1, e1, "truncate") == 1 || boila_kw_ci(sql, s1, e1, "grant") == 1 || boila_kw_ci(sql, s1, e1, "revoke") == 1 {
-        return 3
-    }
-    return 0
 }
 
 fn boila_mt_db_ok(pack: i64, db: str) -> i64 !IO !Time !Par {

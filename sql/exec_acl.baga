@@ -5,6 +5,7 @@ import "parse_acl.baga"
 import "../catalog/acl.baga"
 import "../storage/shards.baga"
 import "../core/row.baga"
+import "../catalog/drop.baga"
 import "std/str/str.baga"
 
 struct BoilaAclCmdOut {

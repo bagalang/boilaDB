@@ -8,6 +8,7 @@ import "../core/value.baga"
 import "../core/row.baga"
 import "../txn/mvcc.baga"
 import "../storage/shards.baga"
+import "../catalog/drop.baga"
 import "std/str/str.baga"
 import "std/bytes/bytes.baga"
 

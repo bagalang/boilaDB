@@ -82,15 +82,25 @@ struct PgWReader {
     // tls=1 → четене през tconn (декриптирани TLS записи), иначе суров TCP.
     // Писането е отделно: виж BoilaPgSess.tls/tconn.
     tls: i64,
-    tconn: TlsConn
+    tconn: TlsConn,
+    // P35b: session-lifetime scratch за tcp_read_into — без него всяко
+    // четене пускаше 8 KB str + 8 KB bytes (tcp_read_bytes) дори за
+    // 60-байтово съобщение. Persist-алокиран в pgw_reader* (режeem: rewind).
+    scratch: str
 }
 
 fn pgw_reader(fd: i64) -> PgWReader {
-    return PgWReader { fd: fd, buf: bytes_new(0), pos: 0, tls: 0, tconn: tls_conn_bad("") }
+    mem_persist_begin()
+    let sc = str_repeat(" ", 8192)
+    mem_persist_end()
+    return PgWReader { fd: fd, buf: bytes_new(0), pos: 0, tls: 0, tconn: tls_conn_bad(""), scratch: sc }
 }
 
 fn pgw_reader_tls(fd: i64, conn: TlsConn) -> PgWReader {
-    return PgWReader { fd: fd, buf: bytes_new(0), pos: 0, tls: 1, tconn: conn }
+    mem_persist_begin()
+    let sc = str_repeat(" ", 8192)
+    mem_persist_end()
+    return PgWReader { fd: fd, buf: bytes_new(0), pos: 0, tls: 1, tconn: conn, scratch: sc }
 }
 
 struct PgWFill {
@@ -98,12 +108,43 @@ struct PgWFill {
     ok: i64
 }
 
+// P36: евтин first-word sniff без пълен lex — copy/guc проверките на всеки
+// 'Q' иначе лексваха целия SQL по веднъж всяка (още един път в exec_sql).
+fn pgw_first_word(sql: str) -> str {
+    let n = len(sql)
+    let mut i: i64 = 0
+    let mut skipping = true
+    while skipping && i < n {
+        let c = char_at(sql, i)
+        if c == 32 || c == 9 || c == 10 || c == 13 {
+            i = i + 1
+        } else {
+            skipping = false
+        }
+    }
+    let mut w = ""
+    let mut reading = true
+    while reading && i < n {
+        let mut c = char_at(sql, i)
+        if c >= 65 && c <= 90 {
+            c = c + 32
+        }
+        if c >= 97 && c <= 122 {
+            w = concat(w, chr(c))
+            i = i + 1
+        } else {
+            reading = false
+        }
+    }
+    return w
+}
+
 // Append one chunk of inbound data, preserving the transport fields.
 fn pgw_fill_append(rr: PgWReader, chunk: bytes) -> PgWReader {
     if rr.pos > 0 {
-        return PgWReader { fd: rr.fd, buf: bytes_concat(bytes_slice(rr.buf, rr.pos, bytes_len(rr.buf)), chunk), pos: 0, tls: rr.tls, tconn: rr.tconn }
+        return PgWReader { fd: rr.fd, buf: bytes_concat(bytes_slice(rr.buf, rr.pos, bytes_len(rr.buf)), chunk), pos: 0, tls: rr.tls, tconn: rr.tconn, scratch: rr.scratch }
     }
-    return PgWReader { fd: rr.fd, buf: bytes_concat(rr.buf, chunk), pos: rr.pos, tls: rr.tls, tconn: rr.tconn }
+    return PgWReader { fd: rr.fd, buf: bytes_concat(rr.buf, chunk), pos: rr.pos, tls: rr.tls, tconn: rr.tconn, scratch: rr.scratch }
 }
 
 fn pgw_fill(r: PgWReader, n: i64) -> PgWFill !IO !Net !Par {
@@ -122,7 +163,7 @@ fn pgw_fill(r: PgWReader, n: i64) -> PgWFill !IO !Net !Par {
             }
             // typ 22 (post-handshake) — skip
         } else {
-            let chunk = tcp_read_bytes(rr.fd, 8192)?
+            let chunk = tcp_read_into(rr.fd, rr.scratch, 8192)?
             if bytes_len(chunk) == 0 {
                 return PgWFill { r: rr, ok: 0 }
             }

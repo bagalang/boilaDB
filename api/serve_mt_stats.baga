@@ -14,6 +14,21 @@ fn boila_mt_stat_inc(pack: i64, key: i64) -> i64 !Par {    let gmu = boila_mt_gm
     return 0
 }
 
+// P34: няколко брояча с ЕДНО вземане на gmu (беше по едно на брояч).
+fn boila_mt_stat_inc2(pack: i64, k1: i64, k2: i64) -> i64 !Par {
+    let gmu = boila_mt_gmu(pack)
+    mutex_lock(gmu)
+    let st: Map<i64, i64> = h_map(boila_mt_stats_h(pack))
+    let mut n1: i64 = 0
+    if map_has(st, k1) == 1 { n1 = map_get(st, k1) }
+    map_set(st, k1, n1 + 1)
+    let mut n2: i64 = 0
+    if map_has(st, k2) == 1 { n2 = map_get(st, k2) }
+    map_set(st, k2, n2 + 1)
+    mutex_unlock(gmu)
+    return 0
+}
+
 fn boila_mt_stat_get(pack: i64, key: i64) -> i64 !Par {
     let gmu = boila_mt_gmu(pack)
     mutex_lock(gmu)
@@ -25,10 +40,9 @@ fn boila_mt_stat_get(pack: i64, key: i64) -> i64 !Par {
 }
 
 fn boila_mt_note_sql(pack: i64, ok: i64) -> i64 !Par {
-    boila_mt_stat_inc(pack, boila_st_sql())?
-    if ok == 1 { boila_mt_stat_inc(pack, boila_st_sql_ok())? }
-    else { boila_mt_stat_inc(pack, boila_st_sql_err())? }
-    return 0
+    // P34: sql + ok/err под едно gmu вземане (беше 2).
+    if ok == 1 { return boila_mt_stat_inc2(pack, boila_st_sql(), boila_st_sql_ok())? }
+    return boila_mt_stat_inc2(pack, boila_st_sql(), boila_st_sql_err())?
 }
 
 fn boila_mt_try_conn(pack: i64) -> i64 !Par {

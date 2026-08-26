@@ -27,6 +27,10 @@ fn pgw_copy_from_apply(pack: i64, srv: BoilaServer, txn: BoilaTxn, db: str, sql:
 }
 
 fn pgw_copy_in_run(pack: i64, srv: BoilaServer, sess: BoilaPgSess, sql: str, rr: PgWReader) -> BoilaPgCopy !IO !Net !Time !Par {
+    // P36: пълен lex само ако първата дума е copy (беше lex на всяка заявка).
+    if pgw_first_word(sql) != "copy" {
+        return BoilaPgCopy { hit: 0, srv: srv, sess: sess, rr: rr, ok: 1 }
+    }
     let lx = boila_lex(sql)
     if lx.err != "" || tok_kw(vec_get(lx.toks, 0), "copy") != 1 {
         return BoilaPgCopy { hit: 0, srv: srv, sess: sess, rr: rr, ok: 1 }

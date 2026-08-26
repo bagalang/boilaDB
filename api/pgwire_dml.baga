@@ -66,15 +66,15 @@ fn boila_server_exec_del(srv: BoilaServer, txn: BoilaTxn, db: str, del: BoilaDel
 }
 
 fn boila_mt_exec_del(pack: i64, txn: BoilaTxn, db: str, del: BoilaDel) -> BoilaSrvOut !IO !Time !Par {
-    boila_mt_data_lock(pack, db)?
+    let lst = boila_mt_data_lock(pack, db)?
     let g = boila_mt_checkout(pack, db)?
     if g.ok == 0 {
-        boila_mt_data_unlock(pack, db)?
+        boila_mt_data_unlock_st(lst)?
         return boila_srv_out_fail(boila_mt_seed_srv(), txn, g.err, g.state)
     }
     let out = boila_pg_run_del(g.store, txn, db, del)?
     boila_mt_checkin_data(pack, db, out.s)
-    boila_mt_data_unlock(pack, db)?
+    boila_mt_data_unlock_st(lst)?
     boila_mt_note_sql(pack, out.ok)?
     return BoilaSrvOut {
         srv: boila_mt_seed_srv(), txn: out.txn, ok: out.ok, err: out.err,
@@ -175,15 +175,15 @@ fn boila_server_exec_upd(srv: BoilaServer, txn: BoilaTxn, db: str, upd: BoilaUpd
 }
 
 fn boila_mt_exec_ins(pack: i64, txn: BoilaTxn, db: str, ins: BoilaIns) -> BoilaSrvOut !IO !Time !Par {
-    boila_mt_data_lock(pack, db)?
+    let lst = boila_mt_data_lock(pack, db)?
     let g = boila_mt_checkout(pack, db)?
     if g.ok == 0 {
-        boila_mt_data_unlock(pack, db)?
+        boila_mt_data_unlock_st(lst)?
         return boila_srv_out_fail(boila_mt_seed_srv(), txn, g.err, g.state)
     }
     let out = boila_pg_run_ins(g.store, txn, db, ins)?
     boila_mt_checkin_data(pack, db, out.s)
-    boila_mt_data_unlock(pack, db)?
+    boila_mt_data_unlock_st(lst)?
     boila_mt_note_sql(pack, out.ok)?
     return BoilaSrvOut {
         srv: boila_mt_seed_srv(), txn: out.txn, ok: out.ok, err: out.err,
@@ -192,15 +192,15 @@ fn boila_mt_exec_ins(pack: i64, txn: BoilaTxn, db: str, ins: BoilaIns) -> BoilaS
 }
 
 fn boila_mt_exec_upd(pack: i64, txn: BoilaTxn, db: str, upd: BoilaUpd) -> BoilaSrvOut !IO !Time !Par {
-    boila_mt_data_lock(pack, db)?
+    let lst = boila_mt_data_lock(pack, db)?
     let g = boila_mt_checkout(pack, db)?
     if g.ok == 0 {
-        boila_mt_data_unlock(pack, db)?
+        boila_mt_data_unlock_st(lst)?
         return boila_srv_out_fail(boila_mt_seed_srv(), txn, g.err, g.state)
     }
     let out = boila_pg_run_upd(g.store, txn, db, upd)?
     boila_mt_checkin_data(pack, db, out.s)
-    boila_mt_data_unlock(pack, db)?
+    boila_mt_data_unlock_st(lst)?
     boila_mt_note_sql(pack, out.ok)?
     return BoilaSrvOut {
         srv: boila_mt_seed_srv(), txn: out.txn, ok: out.ok, err: out.err,

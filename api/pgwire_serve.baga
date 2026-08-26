@@ -212,7 +212,7 @@ fn boila_pg_serve_p(fd: i64, pack: i64, srv: BoilaServer) -> BoilaPgOut !IO !Net
             mem_persist_end()
             // TLS: ключовете на tconn са от старта (преди mark-а) — оцеляват
             // rewind; новият reader запазва транспортните полета.
-            rr = PgWReader { fd: fd, buf: nb, pos: 0, tls: rr.tls, tconn: rr.tconn }
+            rr = PgWReader { fd: fd, buf: nb, pos: 0, tls: rr.tls, tconn: rr.tconn, scratch: rr.scratch }
             sp.txn = idle_txn
             mem_rewind(rmark)
             have_mark = false

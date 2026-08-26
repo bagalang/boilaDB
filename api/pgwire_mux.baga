@@ -5,10 +5,12 @@ import "pgwire.baga"
 import "pgwire_msg.baga"
 import "pgwire_serve.baga"
 import "pgwire_on.baga"
+import "pgwire_prep.baga"
 import "serve_mt.baga"
 import "serve_mux.baga"
 import "../server/databases.baga"
 import "../txn/mvcc.baga"
+import "../sql/ast.baga"
 import "std/net/tcp.baga"
 import "std/net/poll.baga"
 import "std/bytes/bytes.baga"
@@ -18,7 +20,10 @@ struct BoilaPgLive {
     rr: PgWReader,
     sess: BoilaPgSess,
     started: i64,
-    in_err: i64
+    in_err: i64,
+    // P33b: persist idle txn за тази сесия — на park при inactive txn
+    // sess.txn се ресетва към него (per-conn идиомата от pgwire_serve).
+    itxn: BoilaTxn
 }
 
 fn boila_pg_mux_new() -> i64 !Par {
@@ -39,16 +44,19 @@ fn boila_pg_mux_take(mux: i64, fd: i64) -> BoilaPgLive !Par {
     let mu = cell2_0(mux)
     mutex_lock(mu)
     let m: Map<i64, BoilaPgLive> = h_map(cell2_1(mux))
-    let mut live = BoilaPgLive {
-        rr: pgw_reader(fd), sess: boila_pg_sess_new("boila"),
-        started: 0 - 1, in_err: 0
-    }
     if map_has(m, fd) == 1 {
-        live = map_get(m, fd)
+        let live = map_get(m, fd)
         map_del(m, fd)
+        mutex_unlock(mu)
+        return live
     }
     mutex_unlock(mu)
-    return live
+    // Default само за непознат fd (първи turn за връзката) — pgw_reader
+    // пуска 8 KB persist scratch, не смее да се строи на всеки take.
+    return BoilaPgLive {
+        rr: pgw_reader(fd), sess: boila_pg_sess_new("boila"),
+        started: 0 - 1, in_err: 0, itxn: boila_txn_new()
+    }
 }
 
 
@@ -59,6 +67,67 @@ fn boila_pg_mux_close(fd: i64, sess: BoilaPgSess) -> i64 !IO !Par {
     }
     tcp_close(fd)?
     return 0
+}
+
+// P33b: per-turn rewind в mux (същата MEM-4 идиома като per-conn цикъла в
+// pgwire_serve.baga:161-219). Без него worker arena-та расте ~60 KB/заявка
+// безгранично → OOM SIGKILL при sustained load (измерено: 925 MB за 3 s
+// на pgbench c=16). Правила:
+//  - сесията се създава в persist региона (maps/db/e_*/itxn);
+//  - на park live state-ът се преизгражда в persist (reader leftover,
+//    sess обвивка, map node); съдържанието на stmts/portals/guc вече е
+//    persist по MEM-4 местата си;
+//  - rewind се прави само при затворена txn и без TLS (tconn ключовете са
+//    дълбока структура от startup turn-а — не се преизгражда).
+
+// Persist сесия след startup: st.sess идва от turn arena с прясни maps —
+// заменяме с persist maps + копия на guc/db (stmts/portals са празни тук).
+fn boila_pg_mux_psess(s: BoilaPgSess, itxn: BoilaTxn) -> BoilaPgSess {
+    mem_persist_begin()
+    let pstmts: Map<str, BoilaPgStmt> = map_new()
+    let pportals: Map<str, BoilaPgPortal> = map_new()
+    let pguc: Map<str, str> = map_new()
+    let ks = map_keys(s.guc)
+    let mut i: i64 = 0
+    while i < vec_len(ks) {
+        let k = vec_get(ks, i)
+        let v = map_get(s.guc, k)
+        map_set(pguc, substr(k, 0, len(k)), substr(v, 0, len(v)))
+        i = i + 1
+    }
+    let ps = BoilaPgSess {
+        stmts: pstmts, portals: pportals, db: substr(s.db, 0, len(s.db)),
+        txn: itxn, guc: pguc,
+        e_sel: boila_sel_empty(), e_ins: boila_ins_empty(),
+        e_upd: boila_upd_empty(), e_del: boila_del_empty(),
+        fd: s.fd, tls: s.tls, tconn: s.tconn
+    }
+    mem_persist_end()
+    return ps
+}
+
+// Паркиране: преизгражда live в persist региона и го слага в mux картата.
+fn boila_pg_mux_park(mux: i64, fd: i64, live: BoilaPgLive, pempty: bytes) -> i64 !Par {
+    mem_persist_begin()
+    let mut nb = pempty
+    if live.rr.pos < bytes_len(live.rr.buf) {
+        nb = bytes_slice(live.rr.buf, live.rr.pos, bytes_len(live.rr.buf))
+    }
+    let prr = PgWReader { fd: fd, buf: nb, pos: 0, tls: live.rr.tls, tconn: live.rr.tconn, scratch: live.rr.scratch }
+    let s = live.sess
+    let mut txn = live.itxn
+    if s.txn.active == 1 {
+        txn = s.txn
+    }
+    let ps = BoilaPgSess {
+        stmts: s.stmts, portals: s.portals, db: s.db, txn: txn, guc: s.guc,
+        e_sel: s.e_sel, e_ins: s.e_ins, e_upd: s.e_upd, e_del: s.e_del,
+        fd: s.fd, tls: s.tls, tconn: s.tconn
+    }
+    let pl = BoilaPgLive { rr: prr, sess: ps, started: live.started, in_err: live.in_err, itxn: live.itxn }
+    let r = boila_pg_mux_put(mux, fd, pl)?
+    mem_persist_end()
+    return r
 }
 
 fn boila_pg_mux_drain(pack: i64, live0: BoilaPgLive, block: i64) -> BoilaPgLive !IO !Net !Time !Par !Random {
@@ -109,35 +178,60 @@ fn boila_pg_mux_drain(pack: i64, live0: BoilaPgLive, block: i64) -> BoilaPgLive 
     return live
 }
 
-fn boila_pg_mux_turn(pack: i64, mux: i64, fd: i64) -> i64 !IO !Net !Time !Par !Random {
+fn boila_pg_mux_turn(pack: i64, mux: i64, fd: i64, pempty: bytes) -> i64 !IO !Net !Time !Par !Random {
     let mut live = boila_pg_mux_take(mux, fd)?
     if live.started < 0 {
+        mem_persist_begin()
         let sp = boila_pg_sess_new("boila")
-        live = BoilaPgLive { rr: pgw_reader(fd), sess: sp, started: 0, in_err: 0 }
+        let it = boila_txn_new()
+        mem_persist_end()
+        // live.rr идва от take (с persist scratch) — не се пресъздава.
+        live = BoilaPgLive { rr: live.rr, sess: sp, started: 0, in_err: 0, itxn: it }
         live.sess.fd = fd
+        live.sess.txn = live.itxn
+    }
+    // P33b: mark само при затворена txn; rewind — пак при затворена txn и
+    // без TLS (txn може да се отвори в средата на batch → проверка пак накрая).
+    let mut rmark: i64 = 0
+    let mut have_mark = false
+    if live.sess.txn.active == 0 {
+        rmark = mem_mark()
+        have_mark = true
     }
     if live.started == 0 {
         let st = pgw_serve_startup(fd, pack, boila_mt_seed_srv())?
         if st.ok == 0 || st.done == 0 {
             return 0
         }
-        live.rr = st.rr
-        live.sess = st.sess
         live.started = 1
+        live.rr = st.rr
+        live.sess = boila_pg_mux_psess(st.sess, live.itxn)
         live = boila_pg_mux_drain(pack, live, 0)?
         if live.started == 0 - 2 {
             boila_pg_mux_close(fd, live.sess)?
+            if have_mark && live.sess.txn.active == 0 && live.sess.tls == 0 {
+                mem_rewind(rmark)
+            }
             return 0
         }
-        boila_pg_mux_put(mux, fd, live)?
+        boila_pg_mux_park(mux, fd, live, pempty)?
+        if have_mark && live.sess.txn.active == 0 && live.sess.tls == 0 {
+            mem_rewind(rmark)
+        }
         return 1
     }
     live = boila_pg_mux_drain(pack, live, 1)?
     if live.started == 0 - 2 {
         boila_pg_mux_close(fd, live.sess)?
+        if have_mark && live.sess.txn.active == 0 && live.sess.tls == 0 {
+            mem_rewind(rmark)
+        }
         return 0
     }
-    boila_pg_mux_put(mux, fd, live)?
+    boila_pg_mux_park(mux, fd, live, pempty)?
+    if have_mark && live.sess.txn.active == 0 && live.sess.tls == 0 {
+        mem_rewind(rmark)
+    }
     return 1
 }
 
@@ -151,6 +245,9 @@ fn boila_pg_mux_worker(ctx: i64) -> i64 !IO !Net !Time !Par {
     let mux = cell2_0(rest3)
     let wfd = cell2_1(rest3)
     let mut running: i64 = 1
+    mem_persist_begin()
+    let pempty = bytes_new(0)
+    mem_persist_end()
     while running == 1 {
         let p = chan_recv2(work)
         if cell2_0(p) == 0 {
@@ -160,7 +257,7 @@ fn boila_pg_mux_worker(ctx: i64) -> i64 !IO !Net !Time !Par {
             if fd < 0 {
                 running = 0
             } else {
-                let open = boila_pg_mux_turn(pack, mux, fd) catch !IO => 0 catch !Net => 0 catch !Time => 0 catch !Random => 0
+                let open = boila_pg_mux_turn(pack, mux, fd, pempty) catch !IO => 0 catch !Net => 0 catch !Time => 0 catch !Random => 0
                 if open == 1 {
                     chan_send(idle, fd)
                     boila_mux_wake(wfd)?

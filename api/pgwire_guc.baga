@@ -1,5 +1,6 @@
 // pgwire_guc.baga — W7b per-conn SET/SHOW/RESET/DISCARD for PG wire.
 import "pgwire_enc.baga"
+import "pgwire_msg.baga"
 import "../server/exec_server.baga"
 import "../sql/exec_scan.baga"
 import "../sql/exec_out.baga"
@@ -43,6 +44,11 @@ fn pgw_guc_fail(srv: BoilaServer, txn: BoilaTxn, guc: Map<str, str>, err: str, s
 }
 
 fn pgw_try_sess_guc(srv: BoilaServer, txn: BoilaTxn, db: str, guc: Map<str, str>, sql: str) -> BoilaPgGucHit {
+    // P36: пълен lex само за set/show/reset/discard (беше lex на всяка заявка).
+    let w = pgw_first_word(sql)
+    if w != "set" && w != "show" && w != "reset" && w != "discard" {
+        return pgw_guc_miss(srv, txn, guc)
+    }
     let lx = boila_lex(sql)
     if lx.err != "" || vec_len(lx.toks) == 0 {
         return pgw_guc_miss(srv, txn, guc)

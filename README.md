@@ -57,6 +57,7 @@ shared lock; schema DDL is exclusive per database. PG wire TLS 1.3 when
 | HTTP | `/sql` `/health` `/ready` `/metrics` on **:6570** |
 | ORM | [ormbaga](../ormbaga/README.md) **36/36** vs `serve_pg` (with and without `--rc`) |
 | Point @10k | 156k ops/s |
+| pgbench -S (4 workers) | **4.3k / 11.7k / 12.5k / 12.9k tps** @ c=1/4/8/16 (P33–P36) |
 | Insert @10k | 678 ops/s durable (P27); **3134** with `BOILA_SYNC_EVERY=64` (P30) |
 | Mix 80/20 @10k | 1.6k ops/s (2 shards) / 2.2k (4 shards) |
 | 1M INSERT | 169 s, 1.35 GB RSS, DURABLE OK |

@@ -5,6 +5,70 @@ V = value/codec/vector, K = key/scan, S = storage, M = metrics/monitoring,
 H = HTTP/API, Q = SQL (от P1), C = cache/planner, A = агрегати,
 T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
 
+## P36 — lex веднъж (opened 2026-08-26)
+
+- **Q-lex — (FIXED P36) тройно лексване на всяка 'Q'.** `pgw_copy_in_run`
+  и `pgw_try_sess_guc` лексваха целия SQL само за keyword check →
+  `pgw_first_word` sniff (pgwire_msg.baga); пълен lex само за
+  copy/set/show/reset/discard. `boila_mt_kw2` — span scan +
+  `boila_kw_ci` вместо char-concat (беше O(n²) низов churn на заявка).
+  Residual: самият lexer строи токени char-by-char (`boila_substr`/
+  `boila_fold_lower`) — отделна фаза; `boila_mt_exec_sel` (extended
+  path) resolve-ва каталога без кеш (P35 покрива само simple 'Q').
+
+## P35 — in-memory catalog кеш + reader scratch (opened 2026-08-26)
+
+- **Q-cat — (FIXED P35) 3 point GET-а + пълен schema decode на заявка.**
+  `BoilaPlanCache.tm`: table name → декодирана `BoilaTable`; инвалидация
+  със същия DDL gen (boila_pc_invalidate чисти и двете карти). Persist
+  копие при miss (режeem: per-turn rewind). Gate: ALTER ADD/DROP COLUMN
+  след кеширан SELECT връща правилните колони; boila_pgwire/mux тестове.
+  Residual: pc.tm map_set от workers без lock (същия приет риск като
+  pc.m — pc_mu=0, gaps C1); DML/exec_sel пътищата ползват все още
+  пряк resolve.
+- **W-rd — (FIXED P35b) 8 KB str + 8 KB bytes на всяко четене.**
+  `PgWReader.scratch` (persist, session-lifetime) + `tcp_read_into`.
+  Капан: scratch в persist само при реална сесия — `boila_pg_mux_take`
+  вече не строи default live при наличен fd (8 KB persist/turn теч).
+
+## P34 — gmu колапс (opened 2026-08-26)
+
+- **M-gmu — (FIXED P34) 7 вземания на глобалния gmu на заявка.**
+  Сега 4: note_pg(1) + data_lock(1) + checkout_pc(1) + note_sql(1).
+  `boila_mt_checkout_pc` слива checkout+pc_take; `boila_mt_data_lock`
+  връща st, `boila_mt_data_unlock_st` без повторно gmu търсене;
+  `boila_mt_note_sql` = едно gmu за двата брояча (`boila_mt_stat_inc2`).
+  Residual: stats и checkout все още под един глобален mutex —
+  по-нататък: per-db шардиране на stats или atomics.
+
+## P33b — mux per-turn rewind + persist store open (opened 2026-08-26)
+
+- **MEM-5 — (FIXED P33b) worker arena расте безгранично → OOM SIGKILL.**
+  Измерено: 925 MB за 3 s при pgbench c=16 (преди), сървърът умираше за
+  <60 s под sustained load. Mux worker-ите вече правят mem_mark/rewind
+  на turn (MEM-4 идиомата от pgwire_serve): сесията се строи в persist,
+  park преизгражда live state в persist (reader leftover, sess обвивка,
+  itxn), rewind само при затворена txn и без TLS. Същото и в HTTP mux.
+- **MEM-6 — (FIXED P33b) segfault след rewind: lazy store open с
+  arena-bound буфери.** `boila_srv_db`/`boila_srv_db_create` отварят
+  store-а в persist региона (catch вместо `?` под флага). Симптом:
+  SIGFPE в baga_map_slot_b (nb=0 след reuse на rewound RC header).
+- **O4 — (FIXED P33b) tcp_listen fail при зает порт → zombie poll.**
+  serve_pg/serve вече умират fail-loud със съобщение вместо да poll-ват
+  listener=-1 вечно.
+- **Residual (измерени 2026-08-26):** RSS slope ~2–10 KB/заявка все още
+  (persist park ~0.4 KB/turn + arena/glibc фрагментация); per-connection
+  persist state не се освобождава при disconnect (~10 KB/conn); следващ
+  горещ път според sampling профила: sst_get/meta + pc pin/unpin churn
+  в point GET (rocksbaga), после lexer char-concat.
+
+## P33 — poll_wait без syscall storm (opened 2026-08-26, std/net)
+
+- **W-poll — (FIXED P33, в baga std) 8·n+9 syscall-а на poll_wait.**
+  pollfd масивът се сглобява като един bytes буфер + 1 pwrite (беше
+  poke8 × 8 на fd). ~11 syscall-а на poll независимо от n. Gate:
+  tests/std poll/tcp тестове + mux тестовете.
+
 ## P32 — HTTP connection mux (opened 2026-08-26)
 
 - **H-ka — (FIXED P32) HTTP keep-alive pins 1 conn per worker.** Same

@@ -32,6 +32,7 @@ fn boila_mt_db_mu(pack: i64, db: str) -> i64 !Par {
     return cell2_0(boila_mt_db_st(pack, db)?)
 }
 
+// P34: връща st, за да не прави data_unlock второ gmu търсене.
 fn boila_mt_data_lock(pack: i64, db: str) -> i64 !Time !Par {
     let st = boila_mt_db_st(pack, db)?
     let mu = cell2_0(st)
@@ -48,6 +49,19 @@ fn boila_mt_data_lock(pack: i64, db: str) -> i64 !Time !Par {
             sleep_ms(1)
         }
     }
+    return st
+}
+
+// Unlock по вече-намереното st (без gmu lookup — P34).
+fn boila_mt_data_unlock_st(st: i64) -> i64 !Par {
+    let mu = cell2_0(st)
+    let rw: Map<i64, i64> = h_map(cell2_1(st))
+    mutex_lock(mu)
+    let n = map_get(rw, 0)
+    if n > 0 {
+        map_set(rw, 0, n - 1)
+    }
+    mutex_unlock(mu)
     return 0
 }
 

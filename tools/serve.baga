@@ -146,6 +146,10 @@ fn main() -> i64 !Net !IO !Time !Par {
     print(line)
 
     let listener = tcp_listen(port)?
+    if listener < 0 {
+        print(concat("boiladb: listen failed on :", int_to_str(port)))
+        return 1
+    }
     if workers > 0 {
         return boila_http_mux_run(listener, pack, workers)?
     }

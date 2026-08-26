@@ -16,7 +16,9 @@ struct BoilaHttpLive {
     txn: BoilaTxn,
     db: str,
     guc: Map<str, str>,
-    alive: i64
+    alive: i64,
+    // P33b: persist idle txn (park ресетва txn към него — PG mux идиомата)
+    itxn: BoilaTxn
 }
 
 fn boila_http_mux_new() -> i64 !Par {
@@ -37,16 +39,18 @@ fn boila_http_mux_take(mux: i64, fd: i64) -> BoilaHttpLive !Par {
     let mu = cell2_0(mux)
     mutex_lock(mu)
     let m: Map<i64, BoilaHttpLive> = h_map(cell2_1(mux))
-    let mut live = BoilaHttpLive {
-        r: http_reader(fd), txn: boila_txn_new(), db: "boila",
-        guc: map_new(), alive: 0 - 1
-    }
     if map_has(m, fd) == 1 {
-        live = map_get(m, fd)
+        let live = map_get(m, fd)
         map_del(m, fd)
+        mutex_unlock(mu)
+        return live
     }
     mutex_unlock(mu)
-    return live
+    // Default само за непознат fd (първи turn за връзката).
+    return BoilaHttpLive {
+        r: http_reader(fd), txn: boila_txn_new(), db: "boila",
+        guc: map_new(), alive: 0 - 1, itxn: boila_txn_new()
+    }
 }
 
 fn boila_http_left(r: HttpReader) -> i64 {
@@ -64,13 +68,55 @@ fn boila_http_mux_close(fd: i64, live: BoilaHttpLive) -> i64 !IO !Par {
     return 0
 }
 
-fn boila_http_mux_turn(pack: i64, mux: i64, fd: i64) -> i64 !IO !Net !Time !Par {
+// P33b: park с persist преизграждане (PG mux идиомата) + per-turn rewind —
+// без него worker arena-та расте безгранично при sustained keep-alive load.
+fn boila_http_mux_park(mux: i64, fd: i64, live: BoilaHttpLive, pempty: bytes) -> i64 !Par {
+    mem_persist_begin()
+    let mut nb = pempty
+    if live.r.pos < bytes_len(live.r.buf) {
+        nb = bytes_slice(live.r.buf, live.r.pos, bytes_len(live.r.buf))
+    }
+    let pguc: Map<str, str> = map_new()
+    let ks = map_keys(live.guc)
+    let mut i: i64 = 0
+    while i < vec_len(ks) {
+        let k = vec_get(ks, i)
+        let v = map_get(live.guc, k)
+        map_set(pguc, substr(k, 0, len(k)), substr(v, 0, len(v)))
+        i = i + 1
+    }
+    let mut txn = live.itxn
+    if live.txn.active == 1 {
+        txn = live.txn
+    }
+    let pl = BoilaHttpLive {
+        r: HttpReader { fd: fd, buf: nb, pos: 0 },
+        txn: txn, db: substr(live.db, 0, len(live.db)), guc: pguc,
+        alive: live.alive, itxn: live.itxn
+    }
+    let r = boila_http_mux_put(mux, fd, pl)?
+    mem_persist_end()
+    return r
+}
+
+fn boila_http_mux_turn(pack: i64, mux: i64, fd: i64, pempty: bytes) -> i64 !IO !Net !Time !Par {
     let mut live = boila_http_mux_take(mux, fd)?
     if live.alive < 0 {
+        mem_persist_begin()
+        let g0: Map<str, str> = map_new()
+        let it = boila_txn_new()
+        mem_persist_end()
         live = BoilaHttpLive {
-            r: http_reader(fd), txn: boila_txn_new(), db: "boila",
-            guc: map_new(), alive: 1
+            r: http_reader(fd), txn: it, db: "boila",
+            guc: g0, alive: 1, itxn: it
         }
+    }
+    // P33b: mark само при затворена txn; rewind — пак при затворена txn.
+    let mut rmark: i64 = 0
+    let mut have_mark = false
+    if live.txn.active == 0 {
+        rmark = mem_mark()
+        have_mark = true
     }
     let mut first: i64 = 1
     let mut more: i64 = 1
@@ -106,9 +152,15 @@ fn boila_http_mux_turn(pack: i64, mux: i64, fd: i64) -> i64 !IO !Net !Time !Par 
     }
     if live.alive == 0 - 2 {
         boila_http_mux_close(fd, live)?
+        if have_mark && live.txn.active == 0 {
+            mem_rewind(rmark)
+        }
         return 0
     }
-    boila_http_mux_put(mux, fd, live)?
+    boila_http_mux_park(mux, fd, live, pempty)?
+    if have_mark && live.txn.active == 0 {
+        mem_rewind(rmark)
+    }
     return 1
 }
 
@@ -122,6 +174,9 @@ fn boila_http_mux_worker(ctx: i64) -> i64 !IO !Net !Time !Par {
     let mux = cell2_0(rest3)
     let wfd = cell2_1(rest3)
     let mut running: i64 = 1
+    mem_persist_begin()
+    let pempty = bytes_new(0)
+    mem_persist_end()
     while running == 1 {
         let p = chan_recv2(work)
         if cell2_0(p) == 0 {
@@ -131,7 +186,7 @@ fn boila_http_mux_worker(ctx: i64) -> i64 !IO !Net !Time !Par {
             if fd < 0 {
                 running = 0
             } else {
-                let open = boila_http_mux_turn(pack, mux, fd) catch !IO => 0 catch !Net => 0 catch !Time => 0
+                let open = boila_http_mux_turn(pack, mux, fd, pempty) catch !IO => 0 catch !Net => 0 catch !Time => 0
                 if open == 1 {
                     chan_send(idle, fd)
                     boila_mux_wake(wfd)?

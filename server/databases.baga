@@ -208,16 +208,20 @@ fn boila_srv_db(srv: BoilaServer, name: str) -> BoilaSrvDb !IO !Time !Par {
         boila_close(old)?
         s2 = boila_srv_evict(s2, 0)
     }
-    let st = boila_open_store(boila_db_dir(s2.root, name), n, s2.flush_at, s2.compact_at, s2.mt)?
-    if st.ok == 0 {
-        return boila_srv_db_fail(s2, concat("неуспешно отваряне на база '", concat(name, "'")), "XX000")
-    }
-    // MEM-4: името идва от заявката (ephemeral), а списъкът е shared —
-    // persist копие + vec grow в persist региона (буферите са arena-bound).
+    // MEM-4 (P33b): целият open е в persist региона — store-ът е shared,
+    // а per-turn rewind в mux/pool worker-ите иначе оставя висящи map
+    // boxes (tomb/mem/cache) → UAF при следващия GET. `?` след begin
+    // би оставил persist флага вдигнат — затова catch + ok проверка.
     mem_persist_begin()
+    let st = boila_open_store(boila_db_dir(s2.root, name), n, s2.flush_at, s2.compact_at, s2.mt) catch !IO => boila_store_empty() catch !Par => boila_store_empty()
+    // MEM-4: името идва от заявката (ephemeral), а списъкът е shared —
+    // persist копие + vec grow в persist региона.
     vec_push(s2.names, substr(name, 0, len(name)))
     vec_push(s2.stores, st)
     mem_persist_end()
+    if st.ok == 0 {
+        return boila_srv_db_fail(s2, concat("неуспешно отваряне на база '", concat(name, "'")), "XX000")
+    }
     return BoilaSrvDb { srv: s2, ok: 1, err: "", state: "", store: st, name: name }
 }
 
@@ -246,7 +250,10 @@ fn boila_srv_db_create(srv: BoilaServer, name: str) -> BoilaSrvDb !IO !Time !Par
     if n > 64 {
         n = 64
     }
-    let st = boila_open_store(boila_db_dir(s2.root, name), n, s2.flush_at, s2.compact_at, s2.mt)?
+    // MEM-4 (P33b): open в persist региона (виж boila_srv_db).
+    mem_persist_begin()
+    let st = boila_open_store(boila_db_dir(s2.root, name), n, s2.flush_at, s2.compact_at, s2.mt) catch !IO => boila_store_empty() catch !Par => boila_store_empty()
+    mem_persist_end()
     if st.ok == 0 {
         return boila_srv_db_fail(s2, concat("неуспешно създаване на база '", concat(name, "'")), "XX000")
     }

@@ -14,6 +14,11 @@ struct BoilaSelPlan {
 
 struct BoilaPlanCache {
     m: Map<str, BoilaSelPlan>,
+    // P35: in-memory catalog кеш — table name → декодирана BoilaTable.
+    // Убива 3 point GET-а + пълен schema decode на заявка (gaps Q1:
+    // lex+parse+catalog ≈ 4.9 µs; ~79 KB arena churn/заявка през pgwire).
+    // Инвалидира се заедно с m при DDL (boila_pc_invalidate).
+    tm: Map<str, BoilaTable>,
     gen: i64
 }
 
@@ -24,7 +29,8 @@ struct BoilaPcGet {
 
 fn boila_pc_new() -> BoilaPlanCache {
     let m: Map<str, BoilaSelPlan> = map_new()
-    return BoilaPlanCache { m: m, gen: 0 }
+    let tm: Map<str, BoilaTable> = map_new()
+    return BoilaPlanCache { m: m, tm: tm, gen: 0 }
 }
 
 fn boila_pc_empty_plan() -> BoilaSelPlan {
@@ -42,10 +48,31 @@ fn boila_pc_put(pc: BoilaPlanCache, sql: str, plan: BoilaSelPlan) {
     map_set(pc.m, sql, plan)
 }
 
-// DDL → празна карта, нов generation.
+// DDL → празни карти, нов generation.
 fn boila_pc_invalidate(pc: BoilaPlanCache) -> BoilaPlanCache {
     let m: Map<str, BoilaSelPlan> = map_new()
-    return BoilaPlanCache { m: m, gen: pc.gen + 1 }
+    let tm: Map<str, BoilaTable> = map_new()
+    return BoilaPlanCache { m: m, tm: tm, gen: pc.gen + 1 }
+}
+
+// P35: каталог resolve през кеша. Hit → 0 GET-ове. Miss → resolve в
+// persist региона (кешът преживява per-turn rewind; catch вместо `?`,
+// за да не остане persist флагът вдигнат при грешка).
+fn boila_pc_cat(pc: BoilaPlanCache, s: BoilaStore, txn: BoilaTxn, name: str) -> BoilaCatRes !IO !Time !Par {
+    if map_has(pc.tm, name) == 1 {
+        let t = map_get(pc.tm, name)
+        return BoilaCatRes { s: s, ok: 1, err: "", state: "", table: t, id: t.id }
+    }
+    mem_persist_begin()
+    let ct = boila_cat_by_name_txn(s, txn, name)
+        catch !IO => BoilaCatRes { s: s, ok: 0, err: "catalog io", state: "XX000", table: boila_cat_empty_table(), id: 0 }
+        catch !Time => BoilaCatRes { s: s, ok: 0, err: "catalog io", state: "XX000", table: boila_cat_empty_table(), id: 0 }
+        catch !Par => BoilaCatRes { s: s, ok: 0, err: "catalog io", state: "XX000", table: boila_cat_empty_table(), id: 0 }
+    if ct.ok == 1 {
+        map_set(pc.tm, substr(name, 0, len(name)), ct.table)
+    }
+    mem_persist_end()
+    return ct
 }
 
 // MT: brief lock around Map touch (mu=0 → unlocked / tests).

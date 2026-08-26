@@ -107,51 +107,82 @@ fn boila_mt_srv_write(m: Map<i64, BoilaServer>, srv: BoilaServer) {
 }
 
 
+// P36: case-insensitive сравнение на span [i,e) с keyword — без concat.
+fn boila_kw_ci(sql: str, i: i64, e: i64, kw: str) -> i64 {
+    if e - i != len(kw) {
+        return 0
+    }
+    let mut j: i64 = 0
+    while j < len(kw) {
+        let mut c = char_at(sql, i + j)
+        if c >= 65 && c <= 90 {
+            c = c + 32
+        }
+        if c != char_at(kw, j) {
+            return 0
+        }
+        j = j + 1
+    }
+    return 1
+}
+
 // 1=db DDL, 2=USE, 3=schema DDL, 0=data (SELECT/DML/txn).
+// P36: span scan вместо char-concat по целия SQL (беше O(n²) низов churn).
 fn boila_mt_kw2(sql: str) -> i64 {
     let n = len(sql)
     let mut i: i64 = 0
-    let mut w1 = ""
-    let mut w2 = ""
-    let mut wi: i64 = 0
-    let mut cur = ""
-    while i <= n {
+    let mut s1: i64 = 0 - 1
+    let mut e1: i64 = 0 - 1
+    let mut s2: i64 = 0 - 1
+    let mut e2: i64 = 0 - 1
+    let mut nw: i64 = 0
+    let mut scanning = true
+    while scanning && i <= n {
         let mut cl: i64 = 32
         if i < n {
             cl = char_at(sql, i)
-            if cl >= 65 && cl <= 90 {
-                cl = cl + 32
-            }
+        }
+        let mut alpha = false
+        if cl >= 65 && cl <= 90 {
+            alpha = true
         }
         if cl >= 97 && cl <= 122 {
-            cur = concat(cur, chr(cl))
+            alpha = true
+        }
+        if alpha {
+            if nw == 0 && s1 < 0 {
+                s1 = i
+            }
+            if nw == 1 && s2 < 0 {
+                s2 = i
+            }
         } else {
-            if cur != "" {
-                if wi == 0 {
-                    w1 = cur
-                }
-                if wi == 1 {
-                    w2 = cur
-                }
-                wi = wi + 1
-                cur = ""
-                if wi >= 2 {
-                    i = n
+            if nw == 0 && s1 >= 0 {
+                e1 = i
+                nw = 1
+            } else {
+                if nw == 1 && s2 >= 0 {
+                    e2 = i
+                    nw = 2
+                    scanning = false
                 }
             }
         }
         i = i + 1
     }
-    if w1 == "use" {
+    if e1 < 0 {
+        return 0
+    }
+    if boila_kw_ci(sql, s1, e1, "use") == 1 {
         return 2
     }
-    if w1 == "create" || w1 == "drop" {
-        if w2 == "database" {
+    if boila_kw_ci(sql, s1, e1, "create") == 1 || boila_kw_ci(sql, s1, e1, "drop") == 1 {
+        if s2 >= 0 && e2 >= 0 && boila_kw_ci(sql, s2, e2, "database") == 1 {
             return 1
         }
         return 3
     }
-    if w1 == "alter" || w1 == "truncate" || w1 == "grant" || w1 == "revoke" {
+    if boila_kw_ci(sql, s1, e1, "alter") == 1 || boila_kw_ci(sql, s1, e1, "truncate") == 1 || boila_kw_ci(sql, s1, e1, "grant") == 1 || boila_kw_ci(sql, s1, e1, "revoke") == 1 {
         return 3
     }
     return 0
@@ -263,24 +294,63 @@ fn boila_mt_pc_putback(pack: i64, db: str, pc: BoilaPlanCache) -> i64 !Par {
     return 0
 }
 
+struct BoilaMtCo {
+    store: BoilaStore,
+    pc: BoilaPlanCache,
+    ok: i64,
+    err: str,
+    state: str
+}
+
+// P34: checkout + pc_take с ЕДНО gmu вземане (беше 2 отделни на заявка).
+// Warm hit: lookup only (no srv_write). Cold: lazy open + write, същият lock.
+fn boila_mt_checkout_pc(pack: i64, db: str) -> BoilaMtCo !IO !Time !Par {
+    let gmu = boila_mt_gmu(pack)
+    mutex_lock(gmu)
+    let m: Map<i64, BoilaServer> = h_map(boila_mt_srv_h(pack))
+    let srv = map_get(m, 0)
+    let ix = boila_srv_find(srv, db)
+    let mut g: BoilaSrvDb = BoilaSrvDb { srv: srv, ok: 1, err: "", state: "", store: boila_store_empty(), name: db }
+    if ix >= 0 {
+        g = BoilaSrvDb { srv: srv, ok: 1, err: "", state: "", store: vec_get(srv.stores, ix), name: db }
+    } else {
+        let g2 = boila_srv_db(srv, db)?
+        boila_mt_srv_write(m, g2.srv)
+        g = g2
+    }
+    let pcs: Map<str, BoilaPlanCache> = h_map(boila_mt_pcs_h(pack))
+    let mut pc = boila_pc_new()
+    if map_has(pcs, db) == 1 {
+        pc = map_get(pcs, db)
+    } else {
+        // MEM-4: новият pc + ключ от заявката са shared — persist регион
+        mem_persist_begin()
+        pc = boila_pc_new()
+        map_set(pcs, substr(db, 0, len(db)), pc)
+        mem_persist_end()
+    }
+    mutex_unlock(gmu)
+    return BoilaMtCo { store: g.store, pc: pc, ok: g.ok, err: g.err, state: g.state }
+}
+
 // W2: bound SELECT AST path (no re-parse). Shared data lock (P11-1b).
 fn boila_mt_exec_sel(pack: i64, txn: BoilaTxn, db: str, sel: BoilaSel) -> BoilaSrvOut !IO !Time !Par {
-    boila_mt_data_lock(pack, db)?
+    let lst = boila_mt_data_lock(pack, db)?
     let g = boila_mt_checkout(pack, db)?
     if g.ok == 0 {
-        boila_mt_data_unlock(pack, db)?
+        boila_mt_data_unlock_st(lst)?
         return boila_srv_out_fail(boila_mt_seed_srv(), txn, g.err, g.state)
     }
     let ct = boila_cat_by_name_txn(g.store, txn, sel.table)?
     let mut s = ct.s
     if ct.ok == 0 {
         boila_mt_checkin_data(pack, db, s)
-        boila_mt_data_unlock(pack, db)?
+        boila_mt_data_unlock_st(lst)?
         return boila_srv_out_fail(boila_mt_seed_srv(), txn, ct.err, ct.state)
     }
     let ex = boila_exec_select(s, txn, ct.table, sel)?
     boila_mt_checkin_data(pack, db, ex.s)
-    boila_mt_data_unlock(pack, db)?
+    boila_mt_data_unlock_st(lst)?
     boila_mt_note_sql(pack, ex.ok)?
     return BoilaSrvOut {
         srv: boila_mt_seed_srv(), txn: ex.txn, ok: ex.ok, err: ex.err,
@@ -301,31 +371,31 @@ fn boila_mt_exec_guc(pack: i64, txn: BoilaTxn, db: str, sql: str, guc: Map<str, 
     }
 
     // P11-1b: data SQL shared; schema DDL exclusive (W1b SELECT||DROP).
+    let mut lst: i64 = 0
     if k == 3 {
         boila_mt_schema_lock(pack, db)?
     } else {
-        boila_mt_data_lock(pack, db)?
+        lst = boila_mt_data_lock(pack, db)?
     }
 
-    let g = boila_mt_checkout(pack, db)?
+    let g = boila_mt_checkout_pc(pack, db)?
     if g.ok == 0 {
         if k == 3 {
             boila_mt_schema_unlock(pack, db)?
         } else {
-            boila_mt_data_unlock(pack, db)?
+            boila_mt_data_unlock_st(lst)?
         }
         return boila_srv_out_fail(boila_mt_seed_srv(), txn, g.err, g.state)
     }
 
-    let pc = boila_mt_pc_take(pack, db)?
-    let out = boila_exec_sql_mu(g.store, txn, db, sql, pc, 0, guc)?
+    let out = boila_exec_sql_mu(g.store, txn, db, sql, g.pc, 0, guc)?
     if k == 3 {
         boila_mt_checkin(pack, db, out.s)?
         boila_mt_pc_putback(pack, db, out.pc)?
         boila_mt_schema_unlock(pack, db)?
     } else {
         boila_mt_checkin_data(pack, db, out.s)
-        boila_mt_data_unlock(pack, db)?
+        boila_mt_data_unlock_st(lst)?
     }
 
     boila_mt_note_sql(pack, out.ok)?
@@ -340,23 +410,22 @@ fn boila_mt_copy_from(pack: i64, txn: BoilaTxn, db: str, sql: str, data: str) ->
     if txn.active == 1 && txn.db != db {
         return boila_srv_out_fail(boila_mt_seed_srv(), txn, "транзакция, започната в друга база — COMMIT/ROLLBACK първо", "0A000")
     }
-    boila_mt_data_lock(pack, db)?
-    let g = boila_mt_checkout(pack, db)?
+    let lst = boila_mt_data_lock(pack, db)?
+    let g = boila_mt_checkout_pc(pack, db)?
     if g.ok == 0 {
-        boila_mt_data_unlock(pack, db)?
+        boila_mt_data_unlock_st(lst)?
         return boila_srv_out_fail(boila_mt_seed_srv(), txn, g.err, g.state)
     }
     let lx = boila_lex(sql)
     if lx.err != "" {
         boila_mt_checkin_data(pack, db, g.store)
-        boila_mt_data_unlock(pack, db)?
+        boila_mt_data_unlock_st(lst)?
         return boila_srv_out_fail(boila_mt_seed_srv(), txn, lx.err, "42601")
     }
-    let pc = boila_mt_pc_take(pack, db)?
-    let out = boila_exec_copy(g.store, txn, db, pc, lx, data)?
+    let out = boila_exec_copy(g.store, txn, db, g.pc, lx, data)?
     boila_mt_checkin_data(pack, db, out.s)
     boila_mt_pc_putback(pack, db, out.pc)?
-    boila_mt_data_unlock(pack, db)?
+    boila_mt_data_unlock_st(lst)?
     boila_mt_note_sql(pack, out.ok)?
     return BoilaSrvOut {
         srv: boila_mt_seed_srv(), txn: out.txn, ok: out.ok, err: out.err,

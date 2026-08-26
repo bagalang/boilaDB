@@ -41,24 +41,33 @@ fn boila_lower_char(c: i64) -> i64 {
     return c
 }
 
+// P40: builtin substr е byte-slice с една алокация (char_at е byte-oriented —
+// language-en.md:776). Старият вариант строеше char-by-char с concat —
+// O(n²) низов churn на токен (idents са ~половината от токените на заявка).
 fn boila_substr(s: str, lo: i64, hi: i64) -> str {
-    let mut out = ""
-    let mut i = lo
-    while i < hi {
-        out = concat(out, chr(char_at(s, i)))
-        i = i + 1
-    }
-    return out
+    return substr(s, lo, hi)
 }
 
 fn boila_fold_lower(s: str) -> str {
-    let mut out = ""
+    let n = len(s)
+    let b = bytes_new(n)
     let mut i: i64 = 0
-    while i < len(s) {
-        out = concat(out, chr(boila_lower_char(char_at(s, i))))
+    while i < n {
+        bytes_set(b, i, boila_lower_char(char_at(s, i)))
         i = i + 1
     }
-    return out
+    return str_of_bytes(b)
+}
+
+// P40: span → lowercase token за един прочит (без междинен низ).
+fn boila_fold_span(s: str, lo: i64, hi: i64) -> str {
+    let b = bytes_new(hi - lo)
+    let mut i = lo
+    while i < hi {
+        bytes_set(b, i - lo, boila_lower_char(char_at(s, i)))
+        i = i + 1
+    }
+    return str_of_bytes(b)
 }
 
 fn boila_lex(src: str) -> BoilaLex {
@@ -75,7 +84,7 @@ fn boila_lex(src: str) -> BoilaLex {
                 while i < n && boila_is_alnum(char_at(src, i)) > 0 {
                     i = i + 1
                 }
-                vec_push(toks, token_new(tok_ident(), boila_fold_lower(boila_substr(src, st, i))))
+                vec_push(toks, token_new(tok_ident(), boila_fold_span(src, st, i)))
             } else {
                 if boila_is_digit(c) == 1 || (c == 45 && i + 1 < n && boila_is_digit(char_at(src, i + 1)) == 1) {
                     let st = i

@@ -5,6 +5,21 @@ V = value/codec/vector, K = key/scan, S = storage, M = metrics/monitoring,
 H = HTTP/API, Q = SQL (от P1), C = cache/planner, A = агрегати,
 T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
 
+## P40 — lexer span-slicing + alloc проследяване (opened 2026-08-26)
+
+- **Q-lex2 — (FIXED P40) lexer char-by-char concat.** `boila_substr` →
+  builtin substr (1 алокация); `boila_fold_span` за idents (1 прочит).
+  tps неутрален (~2 KB/заявка от лексера — малък дял).
+- **Проследяване (instrumented builds, не се commit-ва):** alloc-site
+  хистограма + caller атрибуция + hit/miss броячи. Изводи:
+  (1) **sst_meta кешът работи** — 9155 hit / 19 miss на нишка (99.8%);
+  суровите байтови обеми бяха подвеждащи (inlining + смесени единици);
+  (2) `bytes_slice` ~57% от alloc трафика, vec_* ~30%;
+  (3) in-process същата заявка е ~6 µs, през wire-а ~83 µs @c=8 —
+  разликата е allocation traffic + mux/sched, не storage;
+  (4) следваща точна стъпка: per-query alloc ДЕЛТИ в steady state
+  (не кумулативно от seed-а) и атака на най-големия сайт.
+
 ## P39 — session handle кеш (opened 2026-08-26)
 
 - **M-gmu2 — (FIXED P39) 4 gmu → 2 на топъл data SQL.** `BoilaMtSessCache`

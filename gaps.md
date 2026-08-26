@@ -5,6 +5,24 @@ V = value/codec/vector, K = key/scan, S = storage, M = metrics/monitoring,
 H = HTTP/API, Q = SQL (от P1), C = cache/planner, A = агрегати,
 T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
 
+## P41 — shape cache (литерални заявки) (opened 2026-08-26)
+
+- **C2 — (FIXED P41) заявки с вариращ литерал никога не hit-ваха план
+  кеша.** `BoilaPlanCache.sm`: ключ = нормализиран SQL (num/str/dec →
+  "?", освен след LIMIT/OFFSET); при точно един placeholder, падащ в
+  pk_eq/pk_lo/pk_hi (проверено по стойност чрез boila_ps_literal), при
+  hit се замества в ЧАСТНО by-value копие на плана (Baga struct = C
+  value — persist планът не се пипа, няма race). Коректност тествана:
+  различни литерали/типове/грешен тип → правилни редове/грешки.
+  **Измерено: tps неутрален** — parse-ът е ~5 µs от ~83 µs/заявка;
+  SELECT 1 flood същия build: 93.7k tps (serving слоят лети), point
+  SELECT: 12.3k — делтата ~70 µs е ~5–10k малки runtime операции
+  (map probe/alloc/copy/vec) разпределени по целия път, без сайт.
+  Оставащи големи опции (записани за следващ етап): (а) compiled point
+  path без generic SQL machinery за "SELECT … WHERE pk = lit";
+  (б) компилаторно ниво — hot builtins (map/bytes/vec ops) като
+  inline intrinsics в codegen вместо b_* function calls.
+
 ## P40 — lexer span-slicing + alloc проследяване (opened 2026-08-26)
 
 - **Q-lex2 — (FIXED P40) lexer char-by-char concat.** `boila_substr` →

@@ -5,6 +5,7 @@
 
 import "lexer.baga"
 import "token.baga"
+import "parse_lit.baga"
 import "parse_select.baga"
 import "parse_alter.baga"
 import "parse_txn.baga"
@@ -71,6 +72,57 @@ import "std/str/str.baga"
 fn boila_exec_sql(s: BoilaStore, txn: BoilaTxn, db: str, sql: str, pc: BoilaPlanCache) -> BoilaSqlOut !IO !Time !Par {
     let guc: Map<str, str> = map_new()
     return boila_exec_sql_mu(s, txn, db, sql, pc, 0, guc)?
+}
+
+// P41: shape cache — нормализиран ключ (литералите → "?") за заявки с
+// вариращи стойности (pgbench aid=…), които суровият ключ никога не
+// hit-ва. При hit се замества pk_eq/pk_lo/pk_hi в ЧАСТНО by-value копие
+// на плана (Baga struct = C value; кешираната persist версия не се пипа —
+// няма cross-worker race).
+struct BoilaShapeKey {
+    key: str,
+    nph: i64,
+    tok_ix: i64
+}
+
+fn boila_shape_key(lx: BoilaLex) -> BoilaShapeKey {
+    let mut key = ""
+    let mut nph: i64 = 0
+    let mut tok_ix: i64 = 0 - 1
+    let mut i: i64 = 0
+    let n = vec_len(lx.toks)
+    while i < n {
+        let tk = vec_get(lx.toks, i)
+        let mut islit = false
+        if tk.kind == tok_num() || tk.kind == tok_str() || tk.kind == tok_dec() {
+            islit = true
+            if i > 0 {
+                let pv = vec_get(lx.toks, i - 1)
+                if tok_kw(pv, "limit") == 1 || tok_kw(pv, "offset") == 1 {
+                    islit = false
+                }
+            }
+        }
+        key = concat(key, chr(1))
+        if islit == true {
+            key = concat(key, "?")
+            if tok_ix < 0 {
+                tok_ix = i
+            }
+            nph = nph + 1
+        } else {
+            key = concat(key, tk.txt)
+        }
+        i = i + 1
+    }
+    return BoilaShapeKey { key: key, nph: nph, tok_ix: tok_ix }
+}
+
+fn boila_shape_val_eq(a: BoilaVal, b: BoilaVal) -> i64 {
+    if a.tag != b.tag { return 0 }
+    if a.i != b.i { return 0 }
+    if bytes_cmp(a.b, b.b) != 0 { return 0 }
+    return 1
 }
 
 fn boila_exec_sql_guc(s: BoilaStore, txn: BoilaTxn, db: str, sql: str, pc: BoilaPlanCache, guc: Map<str, str>) -> BoilaSqlOut !IO !Time !Par {
@@ -148,12 +200,53 @@ fn boila_exec_sql_mu(s: BoilaStore, txn: BoilaTxn, db: str, sql: str, pc: BoilaP
             let ex = boila_exec_select(s, txn, cth.table, hit.plan.sel)?
             return BoilaSqlOut { s: ex.s, txn: ex.txn, pc: pc, ok: ex.ok, err: ex.err, state: ex.state, kind: 1, res: ex.res, id: 0 }
         }
+        // P41: shape cache — заявки с точно един вариращ литерал.
+        let shk = boila_shape_key(lx)
+        if shk.nph == 1 {
+            let sh = boila_pc_sget(pc, shk.key)
+            if sh.hit == 1 && sh.plan.sub_field > 0 {
+                let lv = boila_ps_literal(lx, shk.tok_ix)
+                if lv.ok == 1 && lv.param == 0 {
+                    let sel2 = sh.plan.sel
+                    if sh.plan.sub_field == 1 { sel2.pk_eq = lv.v }
+                    if sh.plan.sub_field == 2 { sel2.pk_lo = lv.v }
+                    if sh.plan.sub_field == 3 { sel2.pk_hi = lv.v }
+                    let cts = boila_pc_cat(pc, s, txn, sel2.table)?
+                    s = cts.s
+                    if cts.ok == 0 { return boila_sql_fail(s, txn, pc, cts.err, cts.state) }
+                    let ex2 = boila_exec_select(s, txn, cts.table, sel2)?
+                    return BoilaSqlOut { s: ex2.s, txn: ex2.txn, pc: pc, ok: ex2.ok, err: ex2.err, state: ex2.state, kind: 1, res: ex2.res, id: 0 }
+                }
+            }
+        }
         let ps = boila_parse_select(lx)
         if ps.ok == 0 { return boila_sql_fail(s, txn, pc, ps.err, ps.state) }
         let ct = boila_pc_cat(pc, s, txn, ps.sel.table)?
         s = ct.s
         if ct.ok == 0 { return boila_sql_fail(s, txn, pc, ct.err, ct.state) }
         let sel = boila_knn_prep_sel(ct.table, ps.sel)
+        // P41: shape put — точно един placeholder, падaщ в pk_eq/lo/hi
+        // (проверено по стойност чрез boila_ps_literal).
+        if shk.nph == 1 && map_len(pc.sm) < 4096 {
+            let lv2 = boila_ps_literal(lx, shk.tok_ix)
+            if lv2.ok == 1 && lv2.param == 0 {
+                let mut subf: i64 = 0
+                if ps.sel.has_eq == 1 && boila_shape_val_eq(ps.sel.pk_eq, lv2.v) == 1 { subf = 1 }
+                if subf == 0 && ps.sel.has_lo == 1 && boila_shape_val_eq(ps.sel.pk_lo, lv2.v) == 1 { subf = 2 }
+                if subf == 0 && ps.sel.has_hi == 1 && boila_shape_val_eq(ps.sel.pk_hi, lv2.v) == 1 { subf = 3 }
+                if subf > 0 {
+                    // MEM-4: persist копие (re-parse), както raw put-а по-долу
+                    mem_persist_begin()
+                    let lx3 = boila_lex(sql)
+                    let ps3 = boila_parse_select(lx3)
+                    if ps3.ok == 1 {
+                        let sel3 = boila_knn_prep_sel(ct.table, ps3.sel)
+                        boila_pc_sput(pc, substr(shk.key, 0, len(shk.key)), BoilaSelPlan { sel: sel3, table: boila_cat_empty_table(), sub_field: subf, sub_tok: shk.tok_ix })
+                    }
+                    mem_persist_end()
+                }
+            }
+        }
         // P36b: заявки с литерали НЕ се кешират — ключът е суров SQL, така
         // че всяка нова стойност (pgbench aid=…) прави нов ключ: persist
         // регионът расте безгранично (~0.5 GB на 76k заявки) и се плаща
@@ -189,7 +282,7 @@ fn boila_exec_sql_mu(s: BoilaStore, txn: BoilaTxn, db: str, sql: str, pc: BoilaP
             let ps2 = boila_parse_select(lx2)
             if ps2.ok == 1 {
                 let sel2 = boila_knn_prep_sel(ct.table, ps2.sel)
-                boila_pc_put(pc, substr(sql, 0, len(sql)), BoilaSelPlan { sel: sel2, table: boila_cat_empty_table() })
+                boila_pc_put(pc, substr(sql, 0, len(sql)), BoilaSelPlan { sel: sel2, table: boila_cat_empty_table(), sub_field: 0, sub_tok: 0 })
             }
             mem_persist_end()
         }

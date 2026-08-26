@@ -9,11 +9,19 @@ import "../catalog/schema.baga"
 
 struct BoilaSelPlan {
     sel: BoilaSel,
-    table: BoilaTable
+    table: BoilaTable,
+    // P41: shape cache — 0 = пълен план (не се замества); 1/2/3 = при hit
+    // се замества pk_eq/pk_lo/pk_hi с литерала от token индекс sub_tok.
+    sub_field: i64,
+    sub_tok: i64
 }
 
 struct BoilaPlanCache {
     m: Map<str, BoilaSelPlan>,
+    // P41: shape cache — ключ нормализиран SQL (литералите → "?"),
+    // за заявки с вариращи литерали (pgbench aid=…), които иначе
+    // никога не биха hit-нали суровия ключ (и пълнят persist чрез put).
+    sm: Map<str, BoilaSelPlan>,
     // P35: in-memory catalog кеш — table name → декодирана BoilaTable.
     // Убива 3 point GET-а + пълен schema decode на заявка (gaps Q1:
     // lex+parse+catalog ≈ 4.9 µs; ~79 KB arena churn/заявка през pgwire).
@@ -29,12 +37,13 @@ struct BoilaPcGet {
 
 fn boila_pc_new() -> BoilaPlanCache {
     let m: Map<str, BoilaSelPlan> = map_new()
+    let sm: Map<str, BoilaSelPlan> = map_new()
     let tm: Map<str, BoilaTable> = map_new()
-    return BoilaPlanCache { m: m, tm: tm, gen: 0 }
+    return BoilaPlanCache { m: m, sm: sm, tm: tm, gen: 0 }
 }
 
 fn boila_pc_empty_plan() -> BoilaSelPlan {
-    return BoilaSelPlan { sel: boila_sel_empty(), table: boila_cat_empty_table() }
+    return BoilaSelPlan { sel: boila_sel_empty(), table: boila_cat_empty_table(), sub_field: 0, sub_tok: 0 }
 }
 
 fn boila_pc_get(pc: BoilaPlanCache, sql: str) -> BoilaPcGet {
@@ -51,8 +60,21 @@ fn boila_pc_put(pc: BoilaPlanCache, sql: str, plan: BoilaSelPlan) {
 // DDL → празни карти, нов generation.
 fn boila_pc_invalidate(pc: BoilaPlanCache) -> BoilaPlanCache {
     let m: Map<str, BoilaSelPlan> = map_new()
+    let sm: Map<str, BoilaSelPlan> = map_new()
     let tm: Map<str, BoilaTable> = map_new()
-    return BoilaPlanCache { m: m, tm: tm, gen: pc.gen + 1 }
+    return BoilaPlanCache { m: m, sm: sm, tm: tm, gen: pc.gen + 1 }
+}
+
+// P41: shape cache lookup/put (без mu — същия договор като pc.m).
+fn boila_pc_sget(pc: BoilaPlanCache, key: str) -> BoilaPcGet {
+    if map_has(pc.sm, key) == 1 {
+        return BoilaPcGet { hit: 1, plan: map_get(pc.sm, key) }
+    }
+    return BoilaPcGet { hit: 0, plan: boila_pc_empty_plan() }
+}
+
+fn boila_pc_sput(pc: BoilaPlanCache, key: str, plan: BoilaSelPlan) {
+    map_set(pc.sm, key, plan)
 }
 
 // P35: каталог resolve през кеша. Hit → 0 GET-ове. Miss → resolve в

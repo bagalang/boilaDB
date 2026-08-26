@@ -85,6 +85,21 @@ struct BoilaSelItem {
     win: BoilaWin
 }
 
+// P28: one JOIN clause (INNER/LEFT, equality ON, possibly swapped).
+struct BoilaJoinStep {
+    kind: i64,
+    table: str,
+    db: str,
+    lcols: Vec<str>,
+    rcols: Vec<str>
+}
+
+fn boila_join_step(kind: i64, table: str, db: str) -> BoilaJoinStep {
+    let l: Vec<str> = vec_new()
+    let r: Vec<str> = vec_new()
+    return BoilaJoinStep { kind: kind, table: table, db: db, lcols: l, rcols: r }
+}
+
 struct BoilaSel {
     table: str,
     table_db: str,    // P18: empty = session db
@@ -122,6 +137,12 @@ struct BoilaSel {
     join_rcol: str,
     join_lcols: Vec<str>, // A3c: ON a=b AND c=d …
     join_rcols: Vec<str>,
+    joins: Vec<BoilaJoinStep>,  // P28: all JOINs (incl. first); empty = use join_*
+    // P28: 0 none, 1 EXISTS, 2 NOT EXISTS, 3 IN (SELECT), 4 NOT IN (SELECT)
+    has_exists: i64,
+    exists_table: str,
+    exists_lcol: str,
+    exists_rcol: str,
     // FTS (P7): WHERE col @@ to_tsquery('…')
     has_fts: i64,
     fts_col: str,
@@ -245,6 +266,7 @@ fn boila_sel_empty() -> BoilaSel {
     let fg: Vec<i64> = vec_new()
     let jl: Vec<str> = vec_new()
     let jr: Vec<str> = vec_new()
+    let js: Vec<BoilaJoinStep> = vec_new()
     let iv: Vec<BoilaVal> = vec_new()
     let xw: Vec<Token> = vec_new()
     let hp: Vec<BoilaHavPred> = vec_new()
@@ -262,7 +284,8 @@ fn boila_sel_empty() -> BoilaSel {
         has_group: 0, group_cols: gc, group_xtoks: gx,
         has_having: 0, hav_preds: hp, hav_nodes: hn, hav_root: 0 - 1,
         has_join: 0, join_kind: 0, join_table: "", join_lcol: "", join_rcol: "",
-        join_lcols: jl, join_rcols: jr,
+        join_lcols: jl, join_rcols: jr, joins: js,
+        has_exists: 0, exists_table: "", exists_lcol: "", exists_rcol: "",
         has_fts: 0, fts_col: "", fts_mode: 1, fts_terms: ft, fts_gaps: fg,
         has_knn: 0, knn_col: "", knn_metric: 1, knn_query: "", knn_pay: bytes_new(0),
         bucket_iv: 0, bucket_col: "",

@@ -133,7 +133,8 @@ rocksbaga при същия хардуер (моделът на scorecard-ите
 - `txn/gc_filter.baga` — P16: rocksbaga per-CF compaction filter
   (data CF, versioned `[pk][~lsn]`); sweeper остава TTL fallback.
 - Backup/monitoring: `lsm_checkpoint`, `lsm_backup_*`, `lsm_dbsize`
-  per shard.
+  per shard. P26 wraps these for the whole server root
+  (`server/backup.baga` — `BOILABK1` catalog + per-database store).
 
 ### txn/ — транзакции
 - **P4 (едно-сесийен модел, реализиран):** писанията се буферират в
@@ -203,8 +204,9 @@ rocksbaga при същия хардуер (моделът на scorecard-ите
   (default = базата по подразбиране `boila`), `/metrics` (metbaga
   Prometheus формат), `/health`. До P3 (write lanes) HTTP loop-ът е sync
   със store-threading (gaps H2), после — thread-per-conn/bounded pool.
-- **CLI** — `boiladb serve | shell | backup | restore | sst-dump`
-  (flagbaga, моделът на rocksbaga/tools).
+- **CLI** — `tools/serve.baga`, `serve_pg.baga`, `shell.baga`,
+  `backup.baga` (`BACKUP_MODE=create|verify|restore`). `sst-dump`
+  остава rocksbaga CLI (P26 residual).
 - **Няма WebSocket в v1** (DoS повърхността на barabadb).
 
 ## 5. BoilaSQL — обхват на подмножеството
@@ -281,6 +283,9 @@ cell2 пакети (доказаният модел на rocksbaga MT и queueba
 - **Group commit:** във всяка write lane заявките се събират в batch;
   един `fdatasync` на прозорец (`commit_window_ms` или размер на batch-а).
   При високо натоварване това е водещият лост — fsync-ът, не CPU-то.
+  P27: auto-commit statement fsync-ва само мръсните шардове; LSN е
+  per-shard, така едноредовият INSERT е **един** fsync (не N).
+  Междузаявлен `commit_window_ms` още не е реализиран.
 - **Commit sequencer:** издава LSN-и за multi-shard commit-и; едно-shard
   commit-и (масовият случай) не го чакат.
 - **MVCC четене:** worker-ите четат без ключалки върху snapshot LSN;
@@ -315,7 +320,7 @@ cell2 пакети (доказаният модел на rocksbaga MT и queueba
 - **Geo/GPS: няма.** Без geometry типове, без пространствени индекси, без
   GPS/trajectory ingestion — и не са планирани.
 - SQL: `NUMERIC` P12; window P13; `COPY` P14 (STDIN/STDOUT text|csv);
-  подзаявки — не. Integrity: NOT NULL/DEFAULT + SERIAL P20-2/P20-3;
+  N JOIN + EXISTS / IN (SELECT) — P28. Integrity: NOT NULL/DEFAULT + SERIAL P20-2/P20-3;
   CHECK, REFERENCES/FK (ON DELETE), многоколонен UNIQUE, numeric
   HAVING/window — P21.
 - Multi-shard транзакции: snapshot; `SERIALIZABLE` — P17 (не 2PC).

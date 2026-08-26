@@ -1,0 +1,126 @@
+// backup_cat.baga — BOILABK1 catalog + name listing (P26).
+//
+// Catalog is written LAST so a torn backup has no BOILABK1 and verify
+// fails. Each `store <suffix> <nshards>` line is a rocksbaga prefix
+// under the dest directory (`.meta`, `boila.db`, …).
+
+import "databases.baga"
+import "../storage/shards.baga"
+import "../storage/shards_keys.baga"
+import "../core/codec.baga"
+import "std/os/os.baga"
+import "std/str/str.baga"
+import "std/bytes/bytes.baga"
+import "std/time/time.baga"
+
+struct BoilaDbList {
+    srv: BoilaServer,
+    names: Vec<str>
+}
+
+fn boila_bk_cat_path(dest: str) -> str {
+    return concat(dest, "/BOILABK1")
+}
+
+fn boila_bk_prefix(dest: str, store: str) -> str {
+    return concat(concat(dest, "/"), store)
+}
+
+fn boila_srv_db_name_list(srv: BoilaServer) -> BoilaDbList !IO !Time !Par {
+    let tk = boila_table_pks(srv.meta, boila_cf_sys(), 1)?
+    srv.meta = tk.s
+    let names: Vec<str> = vec_new()
+    let pre = bytes_of_str("db|")
+    let plen = bytes_len(pre)
+    let mut i: i64 = 0
+    while i < vec_len(tk.pks) {
+        let pk = vec_get(tk.pks, i)
+        if bytes_len(pk) > plen {
+            let mut matchp: i64 = 1
+            let mut j: i64 = 0
+            while j < plen {
+                if bytes_at(pk, j) != bytes_at(pre, j) {
+                    matchp = 0
+                }
+                j = j + 1
+            }
+            if matchp == 1 {
+                vec_push(names, str_of_bytes(bytes_slice(pk, plen, bytes_len(pk))))
+            }
+        }
+        i = i + 1
+    }
+    return BoilaDbList { srv: srv, names: names }
+}
+
+fn boila_bk_write_cat(dest: str, stores: Vec<str>, nshards: Vec<i64>) -> i64 !IO !Time {
+    let ts = time_now_ms()?
+    let mut body = "BOILABK1\n"
+    body = concat(body, concat("created_ms ", concat(int_to_str(ts), "\n")))
+    let mut i: i64 = 0
+    while i < vec_len(stores) {
+        body = concat(body, concat("store ", vec_get(stores, i)))
+        body = concat(body, concat(" ", concat(int_to_str(vec_get(nshards, i)), "\n")))
+        i = i + 1
+    }
+    return write_file(boila_bk_cat_path(dest), body)?
+}
+
+struct BoilaBkCat {
+    stores: Vec<str>,
+    nshards: Vec<i64>,
+    created_ms: i64,
+    ok: i64
+}
+
+fn boila_bk_parse_cat(body: str) -> BoilaBkCat {
+    let stores: Vec<str> = vec_new()
+    let nshards: Vec<i64> = vec_new()
+    let empty = BoilaBkCat { stores: stores, nshards: nshards, created_ms: 0, ok: 0 }
+    if body == "" {
+        return empty
+    }
+    let lines = str_split(body, "\n")
+    if vec_len(lines) < 1 || vec_get(lines, 0) != "BOILABK1" {
+        return empty
+    }
+    let mut created: i64 = 0
+    let mut i: i64 = 1
+    while i < vec_len(lines) {
+        let ln = vec_get(lines, i)
+        i = i + 1
+        if ln != "" {
+            let parts = str_split(ln, " ")
+            let p0 = vec_get(parts, 0)
+            if p0 == "created_ms" && vec_len(parts) >= 2 {
+                created = parse_int(vec_get(parts, 1))
+            } else {
+                if p0 == "store" && vec_len(parts) >= 3 {
+                    vec_push(stores, vec_get(parts, 1))
+                    vec_push(nshards, parse_int(vec_get(parts, 2)))
+                }
+            }
+        }
+    }
+    return BoilaBkCat { stores: stores, nshards: nshards, created_ms: created, ok: 1 }
+}
+
+fn boila_bk_load_cat(dest: str) -> BoilaBkCat !IO {
+    if file_exists(boila_bk_cat_path(dest)) == 0 {
+        let stores: Vec<str> = vec_new()
+        let nshards: Vec<i64> = vec_new()
+        return BoilaBkCat { stores: stores, nshards: nshards, created_ms: 0, ok: 0 }
+    }
+    let body = read_file(boila_bk_cat_path(dest))?
+    return boila_bk_parse_cat(body)
+}
+
+fn boila_bk_live_exists(root: str) -> i64 !IO {
+    if file_exists(concat(root, "/.meta.manifest")) == 1 {
+        return 1
+    }
+    if file_exists(concat(root, "/.meta.s0.manifest")) == 1 {
+        return 1
+    }
+    return 0
+}

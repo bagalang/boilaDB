@@ -6,6 +6,7 @@ import "parse_common.baga"
 import "parse_window.baga"
 import "parse_where.baga"
 import "parse_qual.baga"
+import "parse_join.baga"
 import "parse_having.baga"
 import "tsquery.baga"
 import "../core/value.baga"
@@ -85,56 +86,12 @@ fn boila_parse_select(l: BoilaLex) -> BoilaParseSel {
     sel.table_db = rel.db
     i = rel.pos
 
-    // JOIN (един в P5)
-    let mut jk: i64 = 0
-    if tok_kw(boila_ps_tok(l, i), "inner") == 1 {
-        if tok_kw(boila_ps_tok(l, i + 1), "join") != 1 { return boila_ps_fail("очаквах JOIN след INNER", "42601") }
-        jk = 1
-        i = i + 2
-    } else {
-        if tok_kw(boila_ps_tok(l, i), "left") == 1 {
-            let mut p = i + 1
-            if tok_kw(boila_ps_tok(l, p), "outer") == 1 { p = p + 1 }
-            if tok_kw(boila_ps_tok(l, p), "join") != 1 { return boila_ps_fail("очаквах JOIN след LEFT", "42601") }
-            jk = 2
-            i = p + 1
-        } else {
-            if tok_kw(boila_ps_tok(l, i), "join") == 1 { jk = 1; i = i + 1 }
-        }
+    let jn = boila_parse_joins(l, sel, i)
+    if jn.ok == 0 {
+        return boila_ps_fail(jn.err, jn.state)
     }
-    if jk > 0 {
-        let jr = boila_parse_rel(l, i)
-        if jr.ok == 0 {
-            return boila_ps_fail(jr.err, jr.state)
-        }
-        sel.has_join = 1
-        sel.join_kind = jk
-        sel.join_table = jr.name
-        sel.join_db = jr.db
-        i = jr.pos
-        if tok_kw(boila_ps_tok(l, i), "on") != 1 { return boila_ps_fail("очаквах ON след JOIN таблица", "42601") }
-        i = i + 1
-        let mut more_on = true
-        while more_on {
-            let lc = boila_parse_colref(l, i)
-            if lc.ok == 0 { return boila_ps_fail("очаквах лява колона в ON", "42601") }
-            i = lc.pos
-            if boila_ps_tok(l, i).kind != tok_op() || boila_ps_tok(l, i).txt != "=" {
-                return boila_ps_fail("ON поддържа само '=' ", "0A000")
-            }
-            i = i + 1
-            let rc = boila_parse_colref(l, i)
-            if rc.ok == 0 { return boila_ps_fail("очаквах дясна колона в ON", "42601") }
-            i = rc.pos
-            if vec_len(sel.join_lcols) == 0 { sel.join_lcol = lc.col; sel.join_rcol = rc.col }
-            vec_push(sel.join_lcols, lc.col)
-            vec_push(sel.join_rcols, rc.col)
-            if tok_kw(boila_ps_tok(l, i), "and") == 1 { i = i + 1 } else { more_on = false }
-        }
-        if tok_kw(boila_ps_tok(l, i), "join") == 1 || tok_kw(boila_ps_tok(l, i), "inner") == 1 || tok_kw(boila_ps_tok(l, i), "left") == 1 {
-            return boila_ps_fail("втори JOIN не е в P5", "0A000")
-        }
-    }
+    sel = jn.sel
+    i = jn.pos
 
     // WHERE (eq/range/IS NULL/FTS/kNN/LIKE)
     let wh = boila_parse_where(l, sel, i)

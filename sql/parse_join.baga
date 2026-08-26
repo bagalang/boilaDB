@@ -1,0 +1,129 @@
+// parse_join.baga — one or more JOIN clauses (P28). First JOIN still
+// fills sel.join_* for the existing executor; every clause is also
+// pushed onto sel.joins. Cap 8. ON is equality (AND of eqs).
+
+import "token.baga"
+import "lexer.baga"
+import "ast.baga"
+import "parse_common.baga"
+import "parse_qual.baga"
+import "std/str/str.baga"
+
+struct BoilaParseJoins {
+    ok: i64,
+    sel: BoilaSel,
+    pos: i64,
+    err: str,
+    state: str
+}
+
+fn boila_pj_fail(sel: BoilaSel, pos: i64, msg: str, state: str) -> BoilaParseJoins {
+    return BoilaParseJoins { ok: 0, sel: sel, pos: pos, err: msg, state: state }
+}
+
+fn boila_parse_join_kind(l: BoilaLex, i: i64) -> i64 {
+    if tok_kw(boila_ps_tok(l, i), "inner") == 1 {
+        if tok_kw(boila_ps_tok(l, i + 1), "join") == 1 {
+            return 1
+        }
+        return 0
+    }
+    if tok_kw(boila_ps_tok(l, i), "left") == 1 {
+        return 2
+    }
+    if tok_kw(boila_ps_tok(l, i), "join") == 1 {
+        return 1
+    }
+    return 0
+}
+
+fn boila_parse_join_advance(l: BoilaLex, i: i64, jk: i64) -> i64 {
+    if tok_kw(boila_ps_tok(l, i), "inner") == 1 {
+        return i + 2
+    }
+    if tok_kw(boila_ps_tok(l, i), "left") == 1 {
+        let mut p = i + 1
+        if tok_kw(boila_ps_tok(l, p), "outer") == 1 {
+            p = p + 1
+        }
+        return p + 1
+    }
+    return i + 1
+}
+
+fn boila_parse_joins(l: BoilaLex, sel: BoilaSel, i: i64) -> BoilaParseJoins {
+    let mut n: i64 = 0
+    let mut more = true
+    while more {
+        let jk = boila_parse_join_kind(l, i)
+        if jk == 0 {
+            more = false
+        } else {
+            if tok_kw(boila_ps_tok(l, i), "inner") == 1 && tok_kw(boila_ps_tok(l, i + 1), "join") != 1 {
+                return boila_pj_fail(sel, i, "очаквах JOIN след INNER", "42601")
+            }
+            if jk == 2 {
+                let mut p = i + 1
+                if tok_kw(boila_ps_tok(l, p), "outer") == 1 {
+                    p = p + 1
+                }
+                if tok_kw(boila_ps_tok(l, p), "join") != 1 {
+                    return boila_pj_fail(sel, i, "очаквах JOIN след LEFT", "42601")
+                }
+            }
+            i = boila_parse_join_advance(l, i, jk)
+            let jr = boila_parse_rel(l, i)
+            if jr.ok == 0 {
+                return boila_pj_fail(sel, i, jr.err, jr.state)
+            }
+            i = jr.pos
+            if tok_kw(boila_ps_tok(l, i), "on") != 1 {
+                return boila_pj_fail(sel, i, "очаквах ON след JOIN таблица", "42601")
+            }
+            i = i + 1
+            let mut step = boila_join_step(jk, jr.name, jr.db)
+            let mut more_on = true
+            while more_on {
+                let lc = boila_parse_colref(l, i)
+                if lc.ok == 0 {
+                    return boila_pj_fail(sel, i, "очаквах лява колона в ON", "42601")
+                }
+                i = lc.pos
+                if boila_ps_tok(l, i).kind != tok_op() || boila_ps_tok(l, i).txt != "=" {
+                    return boila_pj_fail(sel, i, "ON поддържа само '=' ", "0A000")
+                }
+                i = i + 1
+                let rc = boila_parse_colref(l, i)
+                if rc.ok == 0 {
+                    return boila_pj_fail(sel, i, "очаквах дясна колона в ON", "42601")
+                }
+                i = rc.pos
+                vec_push(step.lcols, lc.col)
+                vec_push(step.rcols, rc.col)
+                if tok_kw(boila_ps_tok(l, i), "and") == 1 {
+                    i = i + 1
+                } else {
+                    more_on = false
+                }
+            }
+            if n == 0 {
+                sel.has_join = 1
+                sel.join_kind = jk
+                sel.join_table = jr.name
+                sel.join_db = jr.db
+                if vec_len(step.lcols) > 0 {
+                    sel.join_lcol = vec_get(step.lcols, 0)
+                    sel.join_rcol = vec_get(step.rcols, 0)
+                }
+                sel.join_lcols = step.lcols
+                sel.join_rcols = step.rcols
+            }
+            vec_push(sel.joins, step)
+            n = n + 1
+            if n > 8 {
+                return boila_pj_fail(sel, i, "повече от 8 JOIN", "0A000")
+            }
+        }
+    }
+    return BoilaParseJoins { ok: 1, sel: sel, pos: i, err: "", state: "" }
+}

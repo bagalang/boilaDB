@@ -7,7 +7,10 @@ file in v1. Unset variables use the defaults below.
 
 | Variable | Default | Used by | Meaning |
 |----------|---------|---------|---------|
-| `BOILA_PATH` | `/tmp/baga_boila` | HTTP, PG, shell | Server root on disk |
+| `BOILA_PATH` | `/tmp/baga_boila` | HTTP, PG, shell, backup | Server root on disk |
+| `BACKUP_DEST` | `/tmp/baga_boila_backup` | `tools/backup.baga` | Backup directory (create dest / restore dest) |
+| `BACKUP_SRC` | (same as `BACKUP_DEST`) | `tools/backup.baga` | Source directory for verify / restore |
+| `BACKUP_MODE` | `create` | `tools/backup.baga` | `create` · `verify` · `restore` |
 | `BOILA_PORT` | `6570` | `tools/serve.baga` | HTTP listen port |
 | `BOILA_PGPORT` | `6575` | `tools/serve_pg.baga` | PostgreSQL wire port |
 

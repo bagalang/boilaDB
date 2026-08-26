@@ -1,0 +1,75 @@
+// backup.baga — rocksbaga backup/restore for one BoilaStore (P26).
+//
+// A store backup is a rocksbaga cluster checkpoint plus BAGABK1
+// inventory at <dest>.backup. n=1 → <dest>.manifest; n>1 → <dest>.s{i}.
+// MT: copy live Map shards into the cluster vec under all_lock, then
+// checkpoint (c.shards is otherwise stale after hop-less puts).
+
+import "shards.baga"
+import "rocksbaga/db/backup.baga"
+import "rocksbaga/db/shard.baga"
+
+struct BoilaBkStat {
+    ok: i64,
+    nfiles: i64,
+    nbytes: i64
+}
+
+struct BoilaStoreBk {
+    s: BoilaStore,
+    stat: BoilaBkStat
+}
+
+fn boila_bk_stat_fail() -> BoilaBkStat {
+    return BoilaBkStat { ok: 0, nfiles: 0, nbytes: 0 }
+}
+
+fn boila_bk_from_lsm(st: LsmBackupStat) -> BoilaBkStat {
+    return BoilaBkStat { ok: st.ok, nfiles: st.nfiles, nbytes: st.nbytes }
+}
+
+fn boila_store_backup_create(s: BoilaStore, dest: str) -> BoilaStoreBk !IO !Time !Par {
+    if dest == "" {
+        return BoilaStoreBk { s: s, stat: boila_bk_stat_fail() }
+    }
+    if s.dbs_h == 0 {
+        let cr = lsm_cluster_backup_create(s.c, dest)?
+        return BoilaStoreBk {
+            s: BoilaStore { c: cr.c, dbs_h: 0, mus_h: 0, n: cr.c.n, ok: cr.c.ok },
+            stat: boila_bk_from_lsm(cr.stat)
+        }
+    }
+    boila_all_lock(s)?
+    let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
+    let mut i: i64 = 0
+    while i < s.n {
+        vec_set(s.c.shards, i, map_get(dbs, i))
+        i = i + 1
+    }
+    let cr2 = lsm_cluster_backup_create(s.c, dest)?
+    s.c = cr2.c
+    i = 0
+    while i < s.n {
+        map_set(dbs, i, vec_get(s.c.shards, i))
+        i = i + 1
+    }
+    boila_all_unlock(s)?
+    return BoilaStoreBk {
+        s: BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, ok: s.c.ok },
+        stat: boila_bk_from_lsm(cr2.stat)
+    }
+}
+
+fn boila_store_backup_verify(dest: str) -> BoilaBkStat !IO {
+    if dest == "" {
+        return boila_bk_stat_fail()
+    }
+    return boila_bk_from_lsm(lsm_backup_verify(dest)?)
+}
+
+fn boila_store_backup_restore(src: str, dest: str) -> BoilaBkStat !IO {
+    if src == "" || dest == "" || src == dest {
+        return boila_bk_stat_fail()
+    }
+    return boila_bk_from_lsm(lsm_backup_restore(src, dest)?)
+}

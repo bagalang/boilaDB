@@ -1,5 +1,4 @@
-// exec_select.baga — SELECT оркестраторът (P5): fetch/join → агрегати →
-// ORDER BY → проекция → DISTINCT → OFFSET/LIMIT.
+// exec_select.baga — SELECT: fetch/join → agg → ORDER → project → LIMIT.
 
 import "../storage/shards.baga"
 import "../core/value.baga"
@@ -16,7 +15,8 @@ import "exec_isnull.baga"
 import "exec_agg.baga"
 import "exec_agg_stream.baga"
 import "exec_agg_scan.baga"
-import "exec_join.baga"
+import "exec_join_n.baga"
+import "exec_subq.baga"
 import "exec_sort.baga"
 import "exec_window.baga"
 import "exec_dual_ops.baga"
@@ -27,10 +27,8 @@ import "../ts/time_bucket.baga"
 import "std/str/str.baga"
 
 fn boila_exec_select(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, sel: BoilaSel) -> BoilaExec !IO !Time !Par {
-    // редове + схема
     let mut cols = t.cols
     let mut rows: Vec<Vec<BoilaVal>> = vec_new()
-    // има ли агрегати / GROUP BY
     let mut has_agg = false
     let mut k: i64 = 0
     while k < vec_len(sel.items) {
@@ -40,7 +38,6 @@ fn boila_exec_select(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, sel: BoilaSel)
         }
         k = k + 1
     }
-    // S5 stream: GET → fold without materializing full row Vec
     if (has_agg == true || sel.has_group == 1) && boila_agg_streamable(sel) == 1 {
         let mut ex = boila_agg_scan(s, txn, t, sel)?
         s = ex.s
@@ -70,7 +67,7 @@ fn boila_exec_select(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, sel: BoilaSel)
         return boila_exec_ok_select(s, txn, res)
     }
     if sel.has_join == 1 {
-        let j = boila_join_rows(s, txn, t, sel)?
+        let j = boila_join_n(s, txn, t, sel)?
         s = j.s
         txn = j.txn
         if j.ok == 0 {
@@ -95,8 +92,15 @@ fn boila_exec_select(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, sel: BoilaSel)
         }
         rows = f.rows
     }
-
-    // Q-xw: expression WHERE predicate — post-fetch filter
+    if sel.has_exists != 0 {
+        let sq = boila_subq_filter(s, txn, t, cols, rows, sel)?
+        s = sq.s
+        txn = sq.txn
+        if sq.ok == 0 {
+            return boila_exec_fail(s, txn, sq.err, sq.state)
+        }
+        rows = sq.rows
+    }
     if sel.has_xw == 1 {
         let xf = boila_xw_filter(cols, rows, sel.xw_toks)?
         if xf.ok == 0 {
@@ -136,8 +140,6 @@ fn boila_exec_select(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, sel: BoilaSel)
         return boila_exec_ok_select(s, txn, res)
     }
 
-    // S7b: ORDER BY on source cols if all resolve; else after projection
-    // (time_bucket / AS alias live only in output names).
     let mut order_after = 0
     if sel.has_order == 1 {
         let idxs: Vec<i64> = vec_new()
@@ -159,7 +161,6 @@ fn boila_exec_select(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, sel: BoilaSel)
         }
     }
 
-    // проекция (S7: time_bucket + AS alias; Q-sfn: scalar fn items)
     let mut res = boila_result_empty()
     let proj: Vec<i64> = vec_new()
     let bivs: Vec<i64> = vec_new()

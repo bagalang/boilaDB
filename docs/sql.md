@@ -169,7 +169,7 @@ the **old** row.
 ```sql
 SELECT [ALL|DISTINCT] items
   [FROM t]
-  [JOIN u ON t.a = u.b]          -- one INNER or LEFT; ON is equality (+ AND eqs)
+  [JOIN u ON t.a = u.b]          -- INNER or LEFT, repeatable (cap 8); ON is equality (+ AND eqs)
   [WHERE pred]
   [GROUP BY cols|exprs]
   [HAVING pred]
@@ -182,7 +182,8 @@ SELECT [ALL|DISTINCT] items
 
 - `=` `<>` `!=` `<` `<=` `>` `>=`
 - `BETWEEN` / `NOT BETWEEN`
-- `IN` / `NOT IN`
+- `IN` / `NOT IN` (literals, or `IN (SELECT col FROM t)`)
+- `EXISTS` / `NOT EXISTS (SELECT … FROM t WHERE a = b)`
 - `LIKE` / `ILIKE` / `NOT LIKE` (`%` `_`, optional `ESCAPE`)
 - `IS [NOT] NULL`
 - `AND` of the above
@@ -216,8 +217,13 @@ end). CSV via csvbaga. Bad row → `22P04` and the implicit txn
 rolls back. Works under `BOILA_WORKERS>0` (P22-1). No `FROM 'file'`,
 no binary, no `HEADER`.
 
-**Not yet:** subqueries, more than one JOIN, `INTERSECT`/`EXCEPT ALL`
-on tables (set ops exist on dual only).
+**Subqueries (P28):** `WHERE [NOT] EXISTS (SELECT … FROM t WHERE a = b)`
+(one equality). `WHERE col [NOT] IN (SELECT c FROM t)` — uncorrelated,
+no inner WHERE (use EXISTS). Literal `IN (1, 2)` unchanged.
+
+**Not yet:** RIGHT/FULL JOIN, JOIN ON expressions, correlated `IN`,
+subquery with extra AND/JOIN/LIMIT, `INTERSECT`/`EXCEPT ALL` on tables
+(set ops exist on dual only).
 
 ## Dual (`SELECT` without `FROM`)
 

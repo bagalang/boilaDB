@@ -27,7 +27,7 @@ import "std/bytes/bytes.baga"
 
 fn boila_agg_scan(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, sel: BoilaSel) -> BoilaExec !IO !Time !Par {
     // Q-stream-join: JOIN + agg without materializing wide rows
-    if sel.has_join == 1 {
+    if sel.has_join == 1 && vec_len(sel.joins) <= 1 && sel.has_exists == 0 {
         let jf = boila_join_into_fold(s, txn, t, sel)?
         s = jf.s
         txn = jf.txn

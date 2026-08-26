@@ -1,0 +1,70 @@
+// lsn.baga — commit LSN (P4 + P27 per-shard).
+//
+// Legacy: one hashed sys key `m|next_lsn` (often a different shard than
+// the row → two fsyncs per INSERT). P27 stores the counter on each dirty
+// shard via boila_put_at so a single-shard statement fsyncs once.
+// boila_lsn_current is max(legacy hashed, per-shard counters).
+
+import "../storage/shards.baga"
+import "../storage/shards_direct.baga"
+import "../storage/shards_wal.baga"
+import "../core/codec.baga"
+import "../core/value.baga"
+import "../core/row.baga"
+import "std/bytes/bytes.baga"
+
+struct BoilaLsn {
+    s: BoilaStore,
+    lsn: i64
+}
+
+fn boila_lsn_pk() -> bytes {
+    return bytes_of_str("m|next_lsn")
+}
+
+fn boila_lsn_from_val(found: i64, val: bytes) -> i64 {
+    if found == 0 {
+        return 0
+    }
+    let row = boila_row_dec(val)
+    if vec_len(row) < 1 {
+        return 0
+    }
+    let n = vec_get(row, 0).i
+    if n < 1 {
+        return 0
+    }
+    return n - 1
+}
+
+fn boila_lsn_current(s: BoilaStore) -> BoilaLsn !IO !Time !Par {
+    let g = boila_get(s, boila_cf_sys(), 1, boila_lsn_pk())?
+    s = g.s
+    let mut cur = boila_lsn_from_val(g.found, g.val)
+    let mut i: i64 = 0
+    while i < s.n {
+        let sg = boila_get_at(s, i, boila_cf_sys(), 1, boila_lsn_pk())?
+        s = sg.s
+        let v = boila_lsn_from_val(sg.found, sg.val)
+        if v > cur {
+            cur = v
+        }
+        i = i + 1
+    }
+    return BoilaLsn { s: s, lsn: cur }
+}
+
+fn boila_lsn_bump_mask(s: BoilaStore, mask: i64, next: i64) -> BoilaStore !IO !Time !Par {
+    let cnt: Vec<BoilaVal> = vec_new()
+    vec_push(cnt, boila_val_i64(next))
+    let row = boila_row_enc(cnt)
+    let mut i: i64 = 0
+    while i < s.n {
+        if boila_stmt_has(mask, i) == 1 {
+            s = boila_put_at(s, i, boila_cf_sys(), 1, boila_lsn_pk(), row)?
+        }
+        i = i + 1
+    }
+    return s
+}
+

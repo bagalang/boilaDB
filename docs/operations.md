@@ -9,6 +9,7 @@ One OS process, one listen socket per binary:
 | `tools/serve.baga` | 6570 | HTTP/1.1 + JSON |
 | `tools/serve_pg.baga` | 6575 | PostgreSQL frontend/backend v3 |
 | `tools/shell.baga` | — | In-process REPL |
+| `tools/backup.baga` | — | Backup / verify / restore (P26) |
 
 Both servers: poll accept → bounded `BOILA_WORKERS` pool (default 4,
 cap 64) **or** `BOILA_WORKERS=0` → `go_bg` per connection. Over
@@ -32,6 +33,9 @@ GET).
 - rocksbaga WAL wraps the window as `WAL_OP_BATCH` (op 19) with one
   CRC (up to 16 MiB per statement group). A torn tail replays as
   “drop the whole batch” — row and secondary index stay together.
+- P27: `fdatasync` only shards that the statement wrote. The LSN
+  counter is stored on those shards (not a hashed extra WAL). A
+  single-row INSERT pays one fsync regardless of `BOILA_SHARDS`.
 - Kill before `COMMIT` → empty storage (nothing durable).
 - Secondary indexes live on the **same shard** as the row (same WAL
   batch). No index drift after crash.
@@ -43,6 +47,36 @@ Measured insert durability (2026-08-14, cost-based levels): **1M
 rows, 169 s, 1.35 GB RSS, 0 lost, index valid without rebuild**,
 group commit ~3120% vs sync-per-write.
 `bench/boila/results/insert-write-2026-08-14-levels.md`.
+
+## Backup and restore
+
+A backup is a directory that mirrors `BOILA_PATH`: one rocksbaga
+checkpoint per database plus `.meta`, plus a `BOILABK1` catalog written
+**last**. A torn dest has no catalog, so verify fails.
+
+```bash
+# live create + verify
+BOILA_PATH=/tmp/baga_boila BACKUP_DEST=/tmp/baga_boila_bk \
+  BACKUP_MODE=create \
+  ./baga -I . -I app-product app-product/boilaDB/tools/backup.baga
+
+# verify only
+BACKUP_SRC=/tmp/baga_boila_bk BACKUP_MODE=verify \
+  ./baga -I . -I app-product app-product/boilaDB/tools/backup.baga
+
+# restore onto an empty root
+BACKUP_SRC=/tmp/baga_boila_bk BACKUP_DEST=/tmp/baga_boila_rst \
+  BACKUP_MODE=restore \
+  ./baga -I . -I app-product app-product/boilaDB/tools/backup.baga
+```
+
+- Uncommitted `BEGIN` buffers are not in the snapshot (LSM checkpoint).
+- Restore refuses a dest that already has `.meta.manifest`.
+- Missing `BOILABK1` or a CRC mismatch → verify fail.
+- Not in v1: SQL `BACKUP TO`, HTTP `/backup`, single-file tarball,
+  incremental / WAL shipping.
+
+Gate: `tests/boila_backup_test.baga`.
 
 ## Memory
 
@@ -91,6 +125,7 @@ Published numbers (`bench/boila/results/`):
 | Point SELECT @10k | 156k ops/s (6.4 µs) | 2026-08-09 harness |
 | Insert @10k | 524 ops/s | 2026-08-09 |
 | Mix 80/20 @10k | 2.6k ops/s | 2026-08-09 |
+| Insert @10k (P27, this host) | 678 / 724 ops/s (2 / 4 shards) | 2026-08-26 |
 | HTTP mt_ladder 4w c=32 | 7070 ops/s (+48% vs go_bg) | 2026-08-14 |
 | FTS AND @20k docs | 73 µs | 2026-08-08 |
 | kNN 5k×128d | ~12 ms | gaps V2 |

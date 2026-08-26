@@ -1,0 +1,167 @@
+// backup.baga — live backup of a boilaDB root (P26).
+//
+// Layout under <dest>/ (directory):
+//   BOILABK1          catalog — written LAST (partial dest has no catalog)
+//   .meta.backup      registry (rocksbaga BAGABK1)
+//   <name>.db.backup  one per database
+//
+// Verify requires BOILABK1 + every listed store CRC. Restore ships each
+// store into a new BOILA_PATH. Uncommitted txn buffers are not included
+// (checkpoint is LSM-only).
+
+import "databases.baga"
+import "../storage/backup.baga"
+import "../txn/mvcc.baga"
+import "../sql/plan_cache.baga"
+import "backup_cat.baga"
+import "std/os/os.baga"
+import "std/str/str.baga"
+
+extern fn mkdir(path: str, mode: i64) -> i64 !IO
+
+struct BoilaBk {
+    srv: BoilaServer,
+    stat: BoilaBkStat,
+    ndb: i64,
+    err: str
+}
+
+fn boila_bk_fail(srv: BoilaServer, msg: str) -> BoilaBk {
+    return BoilaBk { srv: srv, stat: boila_bk_stat_fail(), ndb: 0, err: msg }
+}
+
+fn boila_bk_ok(srv: BoilaServer, st: BoilaBkStat, ndb: i64) -> BoilaBk {
+    return BoilaBk { srv: srv, stat: st, ndb: ndb, err: "" }
+}
+
+fn boila_bk_empty_srv() -> BoilaServer {
+    let names: Vec<str> = vec_new()
+    let stores: Vec<BoilaStore> = vec_new()
+    let guc: Map<str, str> = map_new()
+    return BoilaServer {
+        meta: boila_store_empty(), root: "", names: names, stores: stores,
+        flush_at: 0, compact_at: 0, dflt_shards: 1, max_db: 1,
+        session_txn: boila_txn_new(), pc: boila_pc_new(), guc: guc, mt: 0, ok: 0
+    }
+}
+
+fn boila_backup_create(srv: BoilaServer, dest: str) -> BoilaBk !IO !Time !Par {
+    if dest == "" {
+        return boila_bk_fail(srv, "empty backup dest")
+    }
+    if dest == srv.root {
+        return boila_bk_fail(srv, "backup dest must differ from BOILA_PATH")
+    }
+    mkdir(dest, 493)?
+    let listed = boila_srv_db_name_list(srv)?
+    srv = listed.srv
+    let stores: Vec<str> = vec_new()
+    let nshards: Vec<i64> = vec_new()
+    let mut nfiles: i64 = 0
+    let mut nbytes: i64 = 0
+    let mut i: i64 = 0
+    while i < vec_len(listed.names) {
+        let name = vec_get(listed.names, i)
+        let d = boila_srv_db(srv, name)?
+        srv = d.srv
+        if d.ok == 0 {
+            return boila_bk_fail(srv, concat("open database failed: ", name))
+        }
+        let store = concat(name, ".db")
+        let cr = boila_store_backup_create(d.store, boila_bk_prefix(dest, store))?
+        srv = boila_srv_store_putback(srv, name, cr.s)
+        if cr.stat.ok == 0 {
+            return boila_bk_fail(srv, concat("store backup failed: ", store))
+        }
+        vec_push(stores, store)
+        vec_push(nshards, cr.s.n)
+        nfiles = nfiles + cr.stat.nfiles
+        nbytes = nbytes + cr.stat.nbytes
+        i = i + 1
+    }
+    let mcr = boila_store_backup_create(srv.meta, boila_bk_prefix(dest, ".meta"))?
+    srv.meta = mcr.s
+    if mcr.stat.ok == 0 {
+        return boila_bk_fail(srv, "meta backup failed")
+    }
+    vec_push(stores, ".meta")
+    vec_push(nshards, mcr.s.n)
+    nfiles = nfiles + mcr.stat.nfiles
+    nbytes = nbytes + mcr.stat.nbytes
+    if boila_bk_write_cat(dest, stores, nshards)? != 0 {
+        return boila_bk_fail(srv, "catalog write failed")
+    }
+    let st = BoilaBkStat { ok: 1, nfiles: nfiles, nbytes: nbytes }
+    return boila_bk_ok(srv, st, vec_len(listed.names))
+}
+
+fn boila_backup_verify(dest: str) -> BoilaBk !IO {
+    let srv = boila_bk_empty_srv()
+    if dest == "" {
+        return boila_bk_fail(srv, "empty backup dest")
+    }
+    let cat = boila_bk_load_cat(dest)?
+    if cat.ok == 0 || vec_len(cat.stores) < 1 {
+        return boila_bk_fail(srv, "missing or invalid BOILABK1")
+    }
+    let mut nfiles: i64 = 0
+    let mut nbytes: i64 = 0
+    let mut i: i64 = 0
+    while i < vec_len(cat.stores) {
+        let st = boila_store_backup_verify(boila_bk_prefix(dest, vec_get(cat.stores, i)))?
+        if st.ok == 0 {
+            return boila_bk_fail(srv, concat("store verify failed: ", vec_get(cat.stores, i)))
+        }
+        nfiles = nfiles + st.nfiles
+        nbytes = nbytes + st.nbytes
+        i = i + 1
+    }
+    let ndb = vec_len(cat.stores) - 1
+    let okst = BoilaBkStat { ok: 1, nfiles: nfiles, nbytes: nbytes }
+    return boila_bk_ok(srv, okst, ndb)
+}
+
+fn boila_backup_restore(src: str, dest: str) -> BoilaBk !IO !Time {
+    let srv = boila_bk_empty_srv()
+    if src == "" || dest == "" {
+        return boila_bk_fail(srv, "empty restore path")
+    }
+    if src == dest {
+        return boila_bk_fail(srv, "restore dest must differ from src")
+    }
+    let v = boila_backup_verify(src)?
+    if v.stat.ok == 0 {
+        return v
+    }
+    if boila_bk_live_exists(dest) == 1 {
+        return boila_bk_fail(srv, "restore dest already has a live store")
+    }
+    mkdir(dest, 493)?
+    let cat = boila_bk_load_cat(src)?
+    if cat.ok == 0 {
+        return boila_bk_fail(srv, "missing BOILABK1")
+    }
+    let mut nfiles: i64 = 0
+    let mut nbytes: i64 = 0
+    let mut i: i64 = 0
+    while i < vec_len(cat.stores) {
+        let store = vec_get(cat.stores, i)
+        let st = boila_store_backup_restore(boila_bk_prefix(src, store), boila_bk_prefix(dest, store))?
+        if st.ok == 0 {
+            return boila_bk_fail(srv, concat("store restore failed: ", store))
+        }
+        nfiles = nfiles + st.nfiles
+        nbytes = nbytes + st.nbytes
+        i = i + 1
+    }
+    if boila_bk_write_cat(dest, cat.stores, cat.nshards)? != 0 {
+        return boila_bk_fail(srv, "catalog copy failed")
+    }
+    let chk = boila_backup_verify(dest)?
+    if chk.stat.ok == 0 {
+        return chk
+    }
+    let ndb = vec_len(cat.stores) - 1
+    let okst = BoilaBkStat { ok: 1, nfiles: nfiles, nbytes: nbytes }
+    return boila_bk_ok(srv, okst, ndb)
+}

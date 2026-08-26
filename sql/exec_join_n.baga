@@ -1,0 +1,148 @@
+// exec_join_n.baga — P28: chain JOIN 2..N on already-wide rows.
+// Join 1 stays in exec_join.baga. Extra steps hash-probe the new table
+// against in-memory left rows. ON pairs may be swapped if the first
+// name belongs to the new table (PG allows either order).
+
+import "../storage/shards.baga"
+import "../core/value.baga"
+import "../core/row.baga"
+import "../catalog/schema.baga"
+import "../txn/mvcc.baga"
+import "ast.baga"
+import "exec_scan.baga"
+import "exec_join.baga"
+import "exec_join_common.baga"
+import "exec_join_filter.baga"
+import "exec_join_hash.baga"
+import "std/str/str.baga"
+import "std/bytes/bytes.baga"
+
+fn boila_join_n(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, sel: BoilaSel) -> BoilaJoinOut !IO !Time !Par {
+    if vec_len(sel.joins) <= 1 {
+        return boila_join_rows(s, txn, t, sel)?
+    }
+    let mut first = sel
+    let empty: Vec<BoilaJoinStep> = vec_new()
+    first.joins = empty
+    first.limit = 0
+    first.has_order = 0
+    let j = boila_join_rows(s, txn, t, first)?
+    s = j.s
+    txn = j.txn
+    if j.ok == 0 {
+        return j
+    }
+    let mut out = j
+    let mut i: i64 = 1
+    while i < vec_len(sel.joins) {
+        let st = boila_join_more(out, vec_get(sel.joins, i), sel)?
+        if st.ok == 0 {
+            return st
+        }
+        out = st
+        i = i + 1
+    }
+    return out
+}
+
+fn boila_join_bind_pair(lcols: Vec<BoilaColDef>, t2: BoilaTable, ln: str, rn: str) -> Vec<i64> {
+    let out: Vec<i64> = vec_new()
+    let li = boila_col_idx_of(lcols, ln)
+    let ri = boila_col_idx(t2, rn)
+    if li >= 0 && ri >= 0 {
+        vec_push(out, li)
+        vec_push(out, ri)
+        return out
+    }
+    let li2 = boila_col_idx_of(lcols, rn)
+    let ri2 = boila_col_idx(t2, ln)
+    if li2 >= 0 && ri2 >= 0 {
+        vec_push(out, li2)
+        vec_push(out, ri2)
+        return out
+    }
+    vec_push(out, 0 - 1)
+    vec_push(out, 0 - 1)
+    return out
+}
+
+fn boila_join_more(left: BoilaJoinOut, step: BoilaJoinStep, sel: BoilaSel) -> BoilaJoinOut !IO !Time !Par {
+    let mut s = left.s
+    let mut txn = left.txn
+    if step.db != "" && step.db != sel.table_db {
+        return boila_join_fail(s, txn, "N-JOIN през база — 0A000", "0A000")
+    }
+    let ct2 = boila_cat_by_name_txn(s, txn, step.table)?
+    s = ct2.s
+    if ct2.ok == 0 {
+        return boila_join_fail(s, txn, ct2.err, ct2.state)
+    }
+    let t2 = ct2.table
+    let lixs: Vec<i64> = vec_new()
+    let rixs: Vec<i64> = vec_new()
+    let mut pi: i64 = 0
+    while pi < vec_len(step.lcols) {
+        let ln = vec_get(step.lcols, pi)
+        let rn = vec_get(step.rcols, pi)
+        let pr = boila_join_bind_pair(left.cols, t2, ln, rn)
+        if vec_get(pr, 0) < 0 {
+            return boila_join_fail(s, txn, concat(concat("JOIN колона '", ln), concat("' / '", concat(rn, "' не се резолва"))), "42703")
+        }
+        vec_push(lixs, vec_get(pr, 0))
+        vec_push(rixs, vec_get(pr, 1))
+        pi = pi + 1
+    }
+    if vec_len(lixs) == 0 {
+        return boila_join_fail(s, txn, "JOIN без ON двойка", "42601")
+    }
+    let ridx = vec_get(rixs, 0)
+    let hb = boila_hj_build_pks(s, txn, t2, ridx)?
+    s = hb.s
+    txn = hb.txn
+    let wcols: Vec<BoilaColDef> = vec_new()
+    let mut ci: i64 = 0
+    while ci < vec_len(left.cols) {
+        vec_push(wcols, vec_get(left.cols, ci))
+        ci = ci + 1
+    }
+    ci = 0
+    while ci < vec_len(t2.cols) {
+        vec_push(wcols, vec_get(t2.cols, ci))
+        ci = ci + 1
+    }
+    let nullr = boila_null_row(vec_len(t2.cols))
+    let rows: Vec<Vec<BoilaVal>> = vec_new()
+    let mut li: i64 = 0
+    while li < vec_len(left.rows) {
+        let lrow = vec_get(left.rows, li)
+        let lix = vec_get(lixs, 0)
+        let mut matched: i64 = 0
+        if lix >= 0 && lix < vec_len(lrow) {
+            let v = vec_get(lrow, lix)
+            if v.tag != boila_v_null() {
+                let k = boila_val_enc(v)
+                if map_has(hb.ht, k) == 1 {
+                    let b = map_get(hb.ht, k)
+                    let mut bi: i64 = 0
+                    while bi < vec_len(b.pks) {
+                        let g = boila_txn_get(s, txn, t2.id, vec_get(b.pks, bi))?
+                        s = g.s
+                        if g.found == 1 {
+                            let rrow = boila_row_pad(boila_row_dec(g.row), vec_len(t2.cols))
+                            if boila_join_eq_all(lrow, rrow, lixs, rixs) == 1 {
+                                vec_push(rows, boila_wide_row(lrow, rrow))
+                                matched = 1
+                            }
+                        }
+                        bi = bi + 1
+                    }
+                }
+            }
+        }
+        if matched == 0 && step.kind == 2 {
+            vec_push(rows, boila_wide_row(lrow, nullr))
+        }
+        li = li + 1
+    }
+    return BoilaJoinOut { s: s, txn: txn, ok: 1, err: "", state: "", cols: wcols, rows: rows }
+}

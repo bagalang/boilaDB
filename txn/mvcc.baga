@@ -8,6 +8,7 @@
 import "../storage/shards.baga"
 import "../storage/shards_wal.baga"
 import "../storage/shards_keys.baga"
+import "lsn.baga"
 import "gc_filter.baga"
 import "serial.baga"
 import "../core/codec.baga"
@@ -90,23 +91,7 @@ fn boila_txn_res(s: BoilaStore, txn: BoilaTxn, ok: i64, err: str, state: str, ls
     return BoilaTxnRes { s: s, txn: txn, ok: ok, err: err, state: state, lsn: lsn }
 }
 
-// --- LSN брояч (sys CF, "m|next_lsn") ---
-
-fn boila_lsn_pk() -> bytes {
-    return bytes_of_str("m|next_lsn")
-}
-
-fn boila_lsn_current(s: BoilaStore) -> BoilaTxnRes !IO !Time !Par {
-    let g = boila_get(s, boila_cf_sys(), 1, boila_lsn_pk())?
-    let mut cur: i64 = 0
-    if g.found == 1 {
-        let row = boila_row_dec(g.val)
-        if vec_len(row) > 0 {
-            cur = vec_get(row, 0).i - 1
-        }
-    }
-    return boila_txn_res(g.s, boila_txn_new(), 1, "", "", cur)
-}
+// LSN counter: txn/lsn.baga (P27 per-shard). Wrap stays here.
 
 // --- value v2: [lsn 8B BE][row] ---
 
@@ -258,21 +243,22 @@ fn boila_txn_commit(s: BoilaStore, txn: BoilaTxn) -> BoilaTxnRes !IO !Time !Par 
             ci = ci + 1
         }
     }
-    // LSN: прочети брояча, запази lsn, запиши lsn+1
-    let g = boila_get(s, boila_cf_sys(), 1, boila_lsn_pk())?
-    s = g.s
-    let mut lsn: i64 = 1
-    if g.found == 1 {
-        let row = boila_row_dec(g.val)
-        if vec_len(row) > 0 {
-            lsn = vec_get(row, 0).i
+    let cur = boila_lsn_current(s)?
+    s = cur.s
+    let lsn = cur.lsn + 1
+    let mut mask: i64 = 0
+    let mut wi: i64 = 0
+    while wi < vec_len(txn.writes) {
+        let w = vec_get(txn.writes, wi)
+        if w.is_del == 1 && boila_cf_versioned(w.cf) == 1 {
+            mask = boila_stmt_all_mask(s.n)
+        } else {
+            mask = boila_stmt_mark_key(mask, s.n, w.cf, w.table_id, w.pk)
         }
+        wi = wi + 1
     }
-    s = boila_stmt_begin(s)
-    let cnt: Vec<BoilaVal> = vec_new()
-    vec_push(cnt, boila_val_i64(lsn + 1))
-    s = boila_put(s, boila_cf_sys(), 1, boila_lsn_pk(), boila_row_enc(cnt))?
-    // TTL comes on the write (caller-filled); commit only forwards it.
+    s = boila_stmt_begin_mask(s, mask)
+    s = boila_lsn_bump_mask(s, mask, lsn + 1)?
     let mut i: i64 = 0
     while i < vec_len(txn.writes) {
         let w = vec_get(txn.writes, i)
@@ -287,7 +273,7 @@ fn boila_txn_commit(s: BoilaStore, txn: BoilaTxn) -> BoilaTxnRes !IO !Time !Par 
         }
         i = i + 1
     }
-    s = boila_stmt_commit(s)?
+    s = boila_stmt_commit_mask(s, mask)?
     let t2 = boila_txn_rollback(txn)
     s = boila_gc_on_end(s)?
     return boila_txn_res(s, t2, 1, "", "", lsn)

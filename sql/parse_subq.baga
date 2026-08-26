@@ -1,0 +1,150 @@
+// parse_subq.baga — P28 EXISTS / IN (SELECT …) (uncorrelated IN;
+// EXISTS with one equality). Hooked from parse_where.
+
+import "token.baga"
+import "lexer.baga"
+import "ast.baga"
+import "parse_common.baga"
+import "parse_qual.baga"
+import "std/str/str.baga"
+
+struct BoilaParseSub {
+    ok: i64,
+    hit: i64,
+    sel: BoilaSel,
+    pos: i64,
+    err: str,
+    state: str
+}
+
+fn boila_psub_fail(sel: BoilaSel, pos: i64, msg: str, state: str) -> BoilaParseSub {
+    return BoilaParseSub { ok: 0, hit: 1, sel: sel, pos: pos, err: msg, state: state }
+}
+
+fn boila_psub_miss(sel: BoilaSel, i: i64) -> BoilaParseSub {
+    return BoilaParseSub { ok: 1, hit: 0, sel: sel, pos: i, err: "", state: "" }
+}
+
+fn boila_parse_exists_at(l: BoilaLex, sel: BoilaSel, i: i64) -> BoilaParseSub {
+    let mut kind: i64 = 0
+    if tok_kw(boila_ps_tok(l, i), "not") == 1 && tok_kw(boila_ps_tok(l, i + 1), "exists") == 1 {
+        kind = 2
+        i = i + 2
+    } else {
+        if tok_kw(boila_ps_tok(l, i), "exists") == 1 {
+            kind = 1
+            i = i + 1
+        }
+    }
+    if kind == 0 {
+        return boila_psub_miss(sel, i)
+    }
+    if sel.has_exists != 0 {
+        return boila_psub_fail(sel, i, "повторно EXISTS / IN (SELECT)", "0A000")
+    }
+    if boila_ps_tok(l, i).kind != tok_lparen() {
+        return boila_psub_fail(sel, i, "очаквах ( след EXISTS", "42601")
+    }
+    i = i + 1
+    if tok_kw(boila_ps_tok(l, i), "select") != 1 {
+        return boila_psub_fail(sel, i, "EXISTS изисква (SELECT …)", "0A000")
+    }
+    i = i + 1
+    // skip select list until FROM
+    let mut depth: i64 = 0
+    let mut more = true
+    while more {
+        let t = boila_ps_tok(l, i)
+        if t.kind == tok_eof() || t.kind == tok_semi() {
+            return boila_psub_fail(sel, i, "EXISTS: очаквах FROM", "42601")
+        }
+        if t.kind == tok_lparen() { depth = depth + 1 }
+        if t.kind == tok_rparen() {
+            if depth == 0 {
+                return boila_psub_fail(sel, i, "EXISTS: очаквах FROM", "42601")
+            }
+            depth = depth - 1
+        }
+        if depth == 0 && tok_kw(t, "from") == 1 {
+            more = false
+        } else {
+            i = i + 1
+        }
+    }
+    i = i + 1
+    let rel = boila_parse_rel(l, i)
+    if rel.ok == 0 {
+        return boila_psub_fail(sel, i, rel.err, rel.state)
+    }
+    i = rel.pos
+    if tok_kw(boila_ps_tok(l, i), "where") != 1 {
+        return boila_psub_fail(sel, i, "EXISTS изисква WHERE col = col", "0A000")
+    }
+    i = i + 1
+    let a = boila_parse_colref(l, i)
+    if a.ok == 0 {
+        return boila_psub_fail(sel, i, "EXISTS WHERE: очаквах колона", "42601")
+    }
+    i = a.pos
+    if boila_ps_tok(l, i).kind != tok_op() || boila_ps_tok(l, i).txt != "=" {
+        return boila_psub_fail(sel, i, "EXISTS WHERE поддържа само '='", "0A000")
+    }
+    i = i + 1
+    let b = boila_parse_colref(l, i)
+    if b.ok == 0 {
+        return boila_psub_fail(sel, i, "EXISTS WHERE: очаквах колона", "42601")
+    }
+    i = b.pos
+    if boila_ps_tok(l, i).kind != tok_rparen() {
+        return boila_psub_fail(sel, i, "очаквах ) след EXISTS подзаявка", "42601")
+    }
+    i = i + 1
+    sel.has_exists = kind
+    sel.exists_table = rel.name
+    sel.exists_lcol = a.col
+    sel.exists_rcol = b.col
+    return BoilaParseSub { ok: 1, hit: 1, sel: sel, pos: i, err: "", state: "" }
+}
+
+fn boila_parse_in_select(l: BoilaLex, sel: BoilaSel, i: i64, in_mode: i64, col: str) -> BoilaParseSub {
+    if tok_kw(boila_ps_tok(l, i), "select") != 1 {
+        return boila_psub_miss(sel, i)
+    }
+    if sel.has_exists != 0 || sel.has_in != 0 {
+        return boila_psub_fail(sel, i, "повторно IN/EXISTS", "0A000")
+    }
+    i = i + 1
+    let c = boila_parse_colref(l, i)
+    if c.ok == 0 {
+        if boila_ps_tok(l, i).kind == tok_star() {
+            return boila_psub_fail(sel, i, "IN (SELECT *) — посочи колона", "0A000")
+        }
+        return boila_psub_fail(sel, i, "IN (SELECT col FROM t)", "0A000")
+    }
+    i = c.pos
+    if tok_kw(boila_ps_tok(l, i), "from") != 1 {
+        return boila_psub_fail(sel, i, "очаквах FROM в IN (SELECT)", "0A000")
+    }
+    i = i + 1
+    let rel = boila_parse_rel(l, i)
+    if rel.ok == 0 {
+        return boila_psub_fail(sel, i, rel.err, rel.state)
+    }
+    i = rel.pos
+    if tok_kw(boila_ps_tok(l, i), "where") == 1 {
+        return boila_psub_fail(sel, i, "IN (SELECT) без WHERE в подзаявката (ползвай EXISTS)", "0A000")
+    }
+    if boila_ps_tok(l, i).kind != tok_rparen() {
+        return boila_psub_fail(sel, i, "очаквах ) след IN (SELECT)", "42601")
+    }
+    i = i + 1
+    let mut k: i64 = 3
+    if in_mode == 2 {
+        k = 4
+    }
+    sel.has_exists = k
+    sel.exists_table = rel.name
+    sel.exists_lcol = col
+    sel.exists_rcol = c.col
+    return BoilaParseSub { ok: 1, hit: 1, sel: sel, pos: i, err: "", state: "" }
+}

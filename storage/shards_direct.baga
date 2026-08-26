@@ -1,0 +1,51 @@
+// shards_direct.baga — get/put on a chosen shard (bypass key hash).
+// P27: per-shard LSN counters live here so a single-row INSERT fsyncs
+// one WAL, not the hashed LSN shard plus the data shard.
+
+import "shards.baga"
+import "../core/codec.baga"
+import "rocksbaga/db/engine.baga"
+import "rocksbaga/db/engine_keys.baga"
+import "std/bytes/bytes.baga"
+
+fn boila_get_at(s: BoilaStore, ix: i64, cf: i64, table_id: i64, pk: bytes) -> BoilaGet !IO !Time !Par {
+    if ix < 0 || ix >= s.n {
+        return BoilaGet { s: s, found: 0, val: bytes_new(0) }
+    }
+    let key = boila_key_row(cf, table_id, pk)
+    if s.dbs_h == 0 {
+        let g = lsm_get_kb(vec_get(s.c.shards, ix), key)?
+        vec_set(s.c.shards, ix, g.db)
+        return BoilaGet {
+            s: BoilaStore { c: s.c, dbs_h: 0, mus_h: 0, n: s.c.n, ok: g.db.ok },
+            found: g.found, val: g.val
+        }
+    }
+    let mu = boila_shard_lock(s, ix)?
+    let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
+    let g = lsm_get_kb(map_get(dbs, ix), key)?
+    map_set(dbs, ix, g.db)
+    mutex_unlock(mu)
+    return BoilaGet { s: s, found: g.found, val: g.val }
+}
+
+fn boila_put_at(s: BoilaStore, ix: i64, cf: i64, table_id: i64, pk: bytes, val: bytes) -> BoilaStore !IO !Time !Par {
+    if ix < 0 || ix >= s.n {
+        return s
+    }
+    let key = boila_key_row(cf, table_id, pk)
+    if s.dbs_h == 0 {
+        let mut db = vec_get(s.c.shards, ix)
+        db = lsm_put_kb(db, key, val)?
+        vec_set(s.c.shards, ix, db)
+        return BoilaStore { c: s.c, dbs_h: 0, mus_h: 0, n: s.c.n, ok: db.ok }
+    }
+    let mu = boila_shard_lock(s, ix)?
+    let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
+    let mut db = map_get(dbs, ix)
+    db = lsm_put_kb(db, key, val)?
+    map_set(dbs, ix, db)
+    let ok = db.ok
+    mutex_unlock(mu)
+    return BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, ok: ok }
+}

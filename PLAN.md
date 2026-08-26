@@ -621,6 +621,64 @@ clauses stay 0A000 (NTILE / named WINDOW — P24).
 - **Gate:** `tests/boila_window_test` rows_run_* / rows_1prec_* /
   range_all_* / groups_0A000 / range_off_0A000.
 
+## P26 — backup / restore / verify
+
+Single-node ops: a consistent snapshot of the whole `BOILA_PATH`
+(registry `.meta` + every database) that can be verified and restored
+onto an empty root. Replication stays out of scope.
+
+- Live create: per-store `lsm_cluster_backup_create` (flush + SST copy +
+  BAGABK1). Catalog `BOILABK1` is written **last** so a torn dest has no
+  catalog and `verify` fails.
+- Verify: catalog present + every listed store size/CRC.
+- Restore: ship each store into a new root; refuse if dest already has
+  `.meta.manifest`. Uncommitted session buffers are not in the snapshot.
+- CLI: `tools/backup.baga` (`BACKUP_MODE=create|verify|restore`).
+- Files: `storage/backup.baga`, `server/backup.baga`,
+  `server/backup_cat.baga`, `tools/backup.baga`.
+- **Gate:** `tests/boila_backup_test` — two DBs + secondary index round-
+  trip; missing catalog / corrupted SST fail verify; uncommitted INSERT
+  is absent after restore.
+- Residual: no `sst-dump` wrapper; no SQL `BACKUP TO`; no HTTP
+  `/backup`; dest is a directory (not a single file).
+
+## P27 — INSERT fsync tax (single-node write path)
+
+Single-row auto-commit INSERT was ~0.5k ops/s because `boila_stmt_commit`
+`fdatasync`-ваше **всеки** shard, and the global `m|next_lsn` key hashed
+to a different shard than the row (2 fsyncs at N=2; 4 at serve default).
+
+- Fsync only shards in a write mask (LSN + DML keys; versioned DELETE
+  still marks all).
+- Per-shard LSN via `boila_put_at` (legacy hashed counter still read for
+  max). One-row INSERT → one WAL fsync, independent of `BOILA_SHARDS`.
+- Files: `storage/shards_wal.baga`, `storage/shards_direct.baga`,
+  `txn/lsn.baga`, `txn/mvcc.baga`.
+- **Gate:** `tests/boila_chaos_test` still ALL PASS; harness insert
+  @10k **678 ops/s** (2 shards) / **724 ops/s** (4 shards) vs 480–524
+  before on this host. `bench/boila/results/harness-2026-08-26.md`.
+- Residual: still one fsync per auto-commit statement (~1.4 ms).
+  5–10k ops/s needs `commit_window` / delayed durability. Multi-row
+  INSERT / COPY already group-commit.
+
+## P28 — N JOIN + EXISTS / IN (SELECT)
+
+Application SQL that bagabuch currently splits into two queries.
+
+- **N JOIN** (cap 8): INNER / LEFT, equality ON (`AND` of eqs). Join 1
+  stays the existing probe; joins 2..N hash-probe the new table against
+  wide in-memory rows. ON names may be swapped if the first belongs to
+  the new table. Cross-db extra joins → `0A000`.
+- **EXISTS / NOT EXISTS** `(SELECT … FROM t WHERE a = b)` — one
+  equality, semi-join via the inner column hash.
+- **IN / NOT IN (SELECT col FROM t)** — uncorrelated; no WHERE in the
+  subquery (use EXISTS). Literal `IN (…)` unchanged.
+- Files: `parse_join.baga`, `exec_join_n.baga`, `parse_subq.baga`,
+  `exec_subq.baga`; hooks in parse_select / parse_where / exec_select.
+- **Gate:** `tests/boila_njoin_test` + `boila_p5_test` njoin_twice.
+- Residual: table.col in ORDER BY after N-join; correlated IN;
+  subquery WHERE; JOIN … ON expressions; RIGHT/FULL.
+
 ## Рискове
 - **`go/chan` само `i64`** → комуникация с shard нишките през канали +
   cell2 пакети (доказан модел: rocksbaga MT `lsm_mt_*`, queuebaga).

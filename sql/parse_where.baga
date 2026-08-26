@@ -1,10 +1,10 @@
-// parse_where.baga — SELECT WHERE (eq/range/IS NULL/FTS/kNN/LIKE).
 import "token.baga"
 import "lexer.baga"
 import "ast.baga"
 import "parse_common.baga"
 import "sfn.baga"
 import "tsquery.baga"
+import "parse_subq.baga"
 import "../core/value.baga"
 import "std/str/str.baga"
 
@@ -25,8 +25,6 @@ fn boila_parse_where(l: BoilaLex, sel: BoilaSel, i: i64) -> BoilaParseWhere {
         return BoilaParseWhere { ok: 1, sel: sel, pos: i, err: "", state: "" }
     }
     i = i + 1
-    // Q-xw pre-scan: a top-level OR makes the whole WHERE one
-    // dual expression (the structural loop has no general OR).
     let mut sc = i
     let mut scd: i64 = 0
     let mut has_top_or: i64 = 0
@@ -48,8 +46,15 @@ fn boila_parse_where(l: BoilaLex, sel: BoilaSel, i: i64) -> BoilaParseWhere {
     }
     let mut more = true
     while more {
-        // Q-xw: non-structural predicate (or any OR-joined WHERE) →
-        // expression filter; the span consumes the rest of WHERE.
+        let ex = boila_parse_exists_at(l, sel, i)
+        if ex.ok == 0 {
+            return boila_pw_fail(sel, ex.pos, ex.err, ex.state)
+        }
+        if ex.hit == 1 {
+            sel = ex.sel
+            i = ex.pos
+            if tok_kw(boila_ps_tok(l, i), "and") == 1 { i = i + 1 } else { more = false }
+        } else {
         if has_top_or == 1 || boila_ps_is_struct_pred(l, i) == 0 {
             if sel.has_xw == 1 {
                 return boila_pw_fail(sel, i, "повторно WHERE-израз условие", "0A000")
@@ -181,7 +186,6 @@ fn boila_parse_where(l: BoilaLex, sel: BoilaSel, i: i64) -> BoilaParseWhere {
             sel.between_not = bnot
             if tok_kw(boila_ps_tok(l, i), "and") == 1 { i = i + 1 } else { more = false }
         } else {
-        // Q-in: col [NOT] IN (lit, …)
         let mut in_mode: i64 = 0
         if tok_kw(boila_ps_tok(l, i), "not") == 1 && tok_kw(boila_ps_tok(l, i + 1), "in") == 1 {
             in_mode = 2
@@ -197,6 +201,15 @@ fn boila_parse_where(l: BoilaLex, sel: BoilaSel, i: i64) -> BoilaParseWhere {
                 return boila_pw_fail(sel, i, "очаквах ( след IN", "42601")
             }
             i = i + 1
+            let ins = boila_parse_in_select(l, sel, i, in_mode, col.txt)
+            if ins.ok == 0 {
+                return boila_pw_fail(sel, ins.pos, ins.err, ins.state)
+            }
+            if ins.hit == 1 {
+                sel = ins.sel
+                i = ins.pos
+                if tok_kw(boila_ps_tok(l, i), "and") == 1 { i = i + 1 } else { more = false }
+            } else {
             if sel.has_in != 0 {
                 return boila_pw_fail(sel, i, "повторно IN/NOT IN", "0A000")
             }
@@ -224,6 +237,7 @@ fn boila_parse_where(l: BoilaLex, sel: BoilaSel, i: i64) -> BoilaParseWhere {
             sel.in_col = col.txt
             sel.in_vals = vals
             if tok_kw(boila_ps_tok(l, i), "and") == 1 { i = i + 1 } else { more = false }
+            }
         } else {
         let op = boila_ps_tok(l, i)
         if op.kind != tok_op() {
@@ -373,6 +387,7 @@ fn boila_parse_where(l: BoilaLex, sel: BoilaSel, i: i64) -> BoilaParseWhere {
             } else {
                 more = false
             }
+        }
         }
         }
         }

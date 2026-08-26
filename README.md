@@ -36,7 +36,7 @@ the SQL flagship on top of the RocksDB-class engine:
 
 ## Status
 
-Phases **P0–P25** landed. Core + modalities (NUMERIC, window, COPY,
+Phases **P0–P28** landed. Core + modalities (NUMERIC, window, COPY,
 SCRAM, filter-GC, serializable, local FDW, raft replica), then the
 application-ready SQL surface — P20: UNIQUE indexes, NOT NULL / DEFAULT,
 SERIAL / BIGSERIAL, decimal SUM/AVG, `to_char`; and P21 schema
@@ -56,8 +56,8 @@ shared lock; schema DDL is exclusive per database. PG wire TLS 1.3 when
 | HTTP | `/sql` `/health` `/ready` `/metrics` on **:6570** |
 | ORM | [ormbaga](../ormbaga/README.md) **36/36** vs `serve_pg` (with and without `--rc`) |
 | Point @10k | 156k ops/s |
-| Insert @10k | 524 ops/s |
-| Mix 80/20 @10k | 2.6k ops/s |
+| Insert @10k | 678 ops/s (2 shards) / 724 (4 shards) — P27 |
+| Mix 80/20 @10k | 1.6k ops/s (2 shards) / 2.2k (4 shards) |
 | 1M INSERT | 169 s, 1.35 GB RSS, DURABLE OK |
 
 Numbers: `bench/boila/results/`. Architecture and phase gates:
@@ -67,7 +67,7 @@ Numbers: `bench/boila/results/`. Architecture and phase gates:
 
 | Area | What ships |
 |------|------------|
-| **SQL** | SELECT / INSERT / UPDATE / DELETE, `$1` prepared, JOIN (INNER/LEFT), GROUP BY / HAVING, window (`OVER`, incl. `LAG`/`LEAD`/`NTILE`, named `WINDOW`, `ROWS` frames), expressions, `CASE`, `CAST`, dual (`SELECT` without FROM); decimal `SUM`/`AVG`/`MIN`/`MAX` + HAVING + window over `NUMERIC`, unquoted NUMERIC literals (`12.50`), `to_char` (incl. month/day names + AM/PM) |
+| **SQL** | SELECT / INSERT / UPDATE / DELETE, `$1` prepared, JOIN (INNER/LEFT, N-way), EXISTS / IN (SELECT), GROUP BY / HAVING, window (`OVER`, incl. `LAG`/`LEAD`/`NTILE`, named `WINDOW`, `ROWS` frames), expressions, `CASE`, `CAST`, dual (`SELECT` without FROM); decimal `SUM`/`AVG`/`MIN`/`MAX` + HAVING + window over `NUMERIC`, unquoted NUMERIC literals (`12.50`), `to_char` (incl. month/day names + AM/PM) |
 | **DDL** | Multi-database (`CREATE`/`DROP`/`USE`), tables (PK required), ALTER add/rename/drop column, indexes (single- & multi-column, `UNIQUE`), `IF [NOT] EXISTS`, `TRUNCATE`, `SHOW` / `DESCRIBE` |
 | **Integrity** | `NOT NULL` / `DEFAULT`, `SERIAL` / `BIGSERIAL`, `CHECK`, `REFERENCES` / foreign keys (`ON DELETE` NO ACTION / RESTRICT / CASCADE / SET NULL), `UNIQUE` (multi-column) |
 | **Txns** | `BEGIN` / `COMMIT` / `ROLLBACK`, session write buffer + LSN, SERIALIZABLE / READ COMMITTED, crash → clean rollback |
@@ -76,7 +76,7 @@ Numbers: `bench/boila/results/`. Architecture and phase gates:
 | **Time-series** | `ttl_days` / `ttl_sec`, `time_bucket`, continuous `CREATE ROLLUP` |
 | **Graph** | `CREATE GRAPH`, `WITH RECURSIVE` BFS / DFS / Dijkstra |
 | **ACL** | `CREATE USER`, `GRANT`/`REVOKE`, token or trust |
-| **Ops** | Query budget, `EXPLAIN [ANALYZE]`, Prometheus metrics |
+| **Ops** | Query budget, `EXPLAIN [ANALYZE]`, Prometheus metrics, backup/restore |
 
 Dialect reference: [docs/sql.md](docs/sql.md). Modalities:
 [docs/modalities.md](docs/modalities.md).
@@ -173,7 +173,7 @@ app-product/boilaDB/
 ├── sql/           lexer → parser → planner → executor
 ├── server/        multi-DB registry
 ├── api/           PG wire + HTTP + worker pool
-├── tools/         serve · serve_pg · shell
+├── tools/         serve · serve_pg · shell · backup
 └── scripts/       filesize.sh  deps.sh
 ```
 
@@ -194,7 +194,7 @@ bash bench/boila/run_modality_benches.sh all
 |----------|----------|
 | **[docs/](docs/README.md)** | Getting started, SQL, HTTP, PG wire, config, security, ops |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Layers, concurrency, v1 bounds |
-| [PLAN.md](PLAN.md) | P0–P25 with measured gates |
+| [PLAN.md](PLAN.md) | P0–P28 with measured gates |
 | [gaps.md](gaps.md) | Honest residuals |
 | [kimi-deps.md](kimi-deps.md) | Import-discipline notes |
 

@@ -1,69 +1,125 @@
 // shards_wal.baga — statement group-commit (K5b). Split from shards.baga
 // so the store file stays under the 400-line gate.
+//
+// P27: fsync only shards that this statement wrote (mask). Unused shards
+// skip group_begin/end and fdatasync — single-row INSERT was paying
+// N fsyncs (harness: 2; default serve: 4) for one row + LSN put.
 
 import "shards.baga"
+import "../core/codec.baga"
 import "rocksbaga/db/engine.baga"
 import "rocksbaga/db/engine_wal.baga"
+import "rocksbaga/db/shard.baga"
 import "rocksbaga/db/shard_ttl.baga"
 
 extern fn fdatasync(fd: i64) -> i64 !IO
 
+fn boila_stmt_all_mask(n: i64) -> i64 {
+    if n >= 63 {
+        return 0 - 1
+    }
+    if n < 1 {
+        return 1
+    }
+    return (1 << n) - 1
+}
+
+fn boila_stmt_has(mask: i64, i: i64) -> i64 {
+    if i < 0 {
+        return 0
+    }
+    if i >= 63 {
+        return 1
+    }
+    return (mask >> i) & 1
+}
+
+fn boila_stmt_mark_key(mask: i64, nshards: i64, cf: i64, table_id: i64, pk: bytes) -> i64 {
+    let ix = lsm_shard_ix_b(nshards, boila_key_row(cf, table_id, pk))
+    if ix < 0 {
+        return mask
+    }
+    if ix >= 63 {
+        return 0 - 1
+    }
+    return mask | (1 << ix)
+}
+
 fn boila_stmt_begin(s: BoilaStore) -> BoilaStore !Par {
+    return boila_stmt_begin_mask(s, boila_stmt_all_mask(s.n))?
+}
+
+fn boila_stmt_commit(s: BoilaStore) -> BoilaStore !IO !Par {
+    return boila_stmt_commit_mask(s, boila_stmt_all_mask(s.n))?
+}
+
+fn boila_stmt_begin_mask(s: BoilaStore, mask: i64) -> BoilaStore !Par {
     if s.dbs_h == 0 {
-        let mut c = lsm_cluster_apply_sync(s.c, 1000000000)
+        let mut c = s.c
         let mut i: i64 = 0
         while i < c.n {
-            let mut db = vec_get(c.shards, i)
-            db = lsm_wal_group_begin(db)
-            vec_set(c.shards, i, db)
+            if boila_stmt_has(mask, i) == 1 {
+                let mut db = vec_get(c.shards, i)
+                db.sync_every = 1000000000
+                db.since_sync = 0
+                db = lsm_wal_group_begin(db)
+                vec_set(c.shards, i, db)
+            }
             i = i + 1
         }
         return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: c.n, ok: s.ok }
     }
-    // Per-shard lock/op/unlock — all_lock през цялата група прави
-    // same-thread double-lock с boila_put/get по време на commit региона.
     let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
     let mut i: i64 = 0
     while i < s.n {
-        let mu = boila_shard_lock(s, i)?
-        let mut db = map_get(dbs, i)
-        db.sync_every = 1000000000
-        db = lsm_wal_group_begin(db)
-        map_set(dbs, i, db)
-        mutex_unlock(mu)
+        if boila_stmt_has(mask, i) == 1 {
+            let mu = boila_shard_lock(s, i)?
+            let mut db = map_get(dbs, i)
+            db.sync_every = 1000000000
+            db.since_sync = 0
+            db = lsm_wal_group_begin(db)
+            map_set(dbs, i, db)
+            mutex_unlock(mu)
+        }
         i = i + 1
     }
     return s
 }
 
-fn boila_stmt_commit(s: BoilaStore) -> BoilaStore !IO !Par {
+fn boila_stmt_commit_mask(s: BoilaStore, mask: i64) -> BoilaStore !IO !Par {
     if s.dbs_h == 0 {
         let mut c = s.c
         let mut i: i64 = 0
         while i < c.n {
-            let mut db = vec_get(c.shards, i)
-            db = lsm_wal_group_end(db)?
-            if db.wal_fd >= 0 {
-                fdatasync(db.wal_fd)?
+            if boila_stmt_has(mask, i) == 1 {
+                let mut db = vec_get(c.shards, i)
+                db = lsm_wal_group_end(db)?
+                if db.wal_fd >= 0 {
+                    fdatasync(db.wal_fd)?
+                }
+                db.sync_every = 1
+                db.since_sync = 0
+                vec_set(c.shards, i, db)
             }
-            vec_set(c.shards, i, db)
             i = i + 1
         }
-        c = lsm_cluster_apply_sync(c, 1)
         return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: c.n, ok: s.ok }
     }
     let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
     let mut i: i64 = 0
     while i < s.n {
-        let mu = boila_shard_lock(s, i)?
-        let mut db = map_get(dbs, i)
-        db = lsm_wal_group_end(db)?
-        if db.wal_fd >= 0 {
-            fdatasync(db.wal_fd)?
+        if boila_stmt_has(mask, i) == 1 {
+            let mu = boila_shard_lock(s, i)?
+            let mut db = map_get(dbs, i)
+            db = lsm_wal_group_end(db)?
+            if db.wal_fd >= 0 {
+                fdatasync(db.wal_fd)?
+            }
+            db.sync_every = 1
+            db.since_sync = 0
+            map_set(dbs, i, db)
+            mutex_unlock(mu)
         }
-        db.sync_every = 1
-        map_set(dbs, i, db)
-        mutex_unlock(mu)
         i = i + 1
     }
     return s

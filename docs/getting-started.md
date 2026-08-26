@@ -117,6 +117,24 @@ boila[boila]> \q
 
 Empty line or `\q` exits. `USE otherdb` changes the prompt.
 
+## Backup / restore
+
+Snapshot the whole `BOILA_PATH` (every database + the registry), verify
+the CRC inventory, restore onto an **empty** directory:
+
+```bash
+BOILA_PATH=/tmp/baga_boila BACKUP_DEST=/tmp/baga_boila_bk \
+  BACKUP_MODE=create \
+  ./baga -I . -I app-product app-product/boilaDB/tools/backup.baga
+
+BACKUP_SRC=/tmp/baga_boila_bk BACKUP_DEST=/tmp/baga_boila_rst \
+  BACKUP_MODE=restore \
+  ./baga -I . -I app-product app-product/boilaDB/tools/backup.baga
+```
+
+See [operations.md](operations.md) for verify, occupied-dest refusal,
+and what is *not* in the snapshot (open transactions).
+
 ## sandak
 
 ```toml

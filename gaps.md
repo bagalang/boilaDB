@@ -5,6 +5,47 @@ V = value/codec/vector, K = key/scan, S = storage, M = metrics/monitoring,
 H = HTTP/API, Q = SQL (от P1), C = cache/planner, A = агрегати,
 T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
 
+## P28 — N JOIN + subquery (opened 2026-08-26)
+
+- **J1 — (FIXED P28) more than one JOIN.** Cap 8; INNER/LEFT; equality
+  ON; name swap if needed. Gate: `boila_njoin_test` njoin_*. Residual:
+  RIGHT/FULL; ON expressions; extra JOIN across databases; `ORDER BY
+  table.col` after a wide join (qualifier is stripped — use the column
+  name / alias).
+- **Q-sub — (FIXED P28) EXISTS / IN (SELECT).** EXISTS: one `col = col`
+  in the subquery WHERE. IN (SELECT col FROM t) uncorrelated, no inner
+  WHERE. Gate: exists / not_exists / in_select / not_in_select.
+  Residual: correlated IN; subquery with extra AND / JOIN / LIMIT;
+  `EXISTS (SELECT * FROM t)` without WHERE.
+
+## P27 — INSERT fsync tax (opened 2026-08-26)
+
+- **W8 — (FIXED P27) fsync every shard on every statement.**
+  `boila_stmt_commit_mask` + per-shard LSN (`txn/lsn.baga`). Single-row
+  INSERT fsyncs one WAL. Gate: `boila_chaos_test` + harness-2026-08-26
+  (678/724 ops/s @10k, 2/4 shards). Residual: still fsync-per-statement;
+  no `synchronous_commit=off` / commit window; SQL parse+catalog tax
+  remains (~40–60 µs, not the 1.4 ms).
+- **W9 — INSERT 5–10k ops/s.** Needs delayed durability or a
+  `commit_window_ms` across auto-commit statements. Not this phase.
+
+## P26 — backup / restore (opened 2026-08-26)
+
+- **O1 — (FIXED P26) live backup of the server root.** `boila_backup_create`
+  checkpoints `.meta` + every registered database into `<dest>/` with a
+  `BOILABK1` catalog written last. Gate: `tests/boila_backup_test` create
+  / verify / restore. Residual: dest is a directory of rocksbaga prefixes
+  (not a single tarball); no incremental / WAL-shipping backup.
+- **O2 — (FIXED P26) verify + torn dest.** Missing `BOILABK1` or a CRC
+  mismatch on any listed store → fail. Residual: leftover SST gens from a
+  previous backup in the same dest are not deleted (verify only checks
+  listed files).
+- **O3 — (FIXED P26) restore onto an empty root.** Occupied dest
+  (`.meta.manifest` present) is refused. Uncommitted txn buffers are not
+  in the snapshot. Residual: no SQL `BACKUP`/`RESTORE`; no HTTP
+  `/backup`; `tools/sst-dump` wrapper still absent (rocksbaga has its
+  own).
+
 ## P25 — ROWS / RANGE frames (opened 2026-08-24)
 
 - **W6 — (FIXED P25) ROWS frames.** `UNBOUNDED PRECEDING/FOLLOWING`,

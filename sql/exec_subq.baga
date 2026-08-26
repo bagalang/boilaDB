@@ -1,0 +1,107 @@
+// exec_subq.baga — P28 EXISTS / IN (SELECT) as a semi-join filter.
+// IN (SELECT col FROM t): load distinct inner col, keep outer rows in/not in.
+// EXISTS (SELECT … WHERE a = b): same, after binding which name is inner.
+
+import "../storage/shards.baga"
+import "../core/value.baga"
+import "../core/row.baga"
+import "../catalog/schema.baga"
+import "../txn/mvcc.baga"
+import "ast.baga"
+import "exec_scan.baga"
+import "exec_join_hash.baga"
+import "std/str/str.baga"
+import "std/bytes/bytes.baga"
+
+struct BoilaSubqOut {
+    s: BoilaStore,
+    txn: BoilaTxn,
+    ok: i64,
+    err: str,
+    state: str,
+    rows: Vec<Vec<BoilaVal>>
+}
+
+fn boila_subq_fail(s: BoilaStore, txn: BoilaTxn, msg: str, state: str) -> BoilaSubqOut {
+    let rows: Vec<Vec<BoilaVal>> = vec_new()
+    return BoilaSubqOut { s: s, txn: txn, ok: 0, err: msg, state: state, rows: rows }
+}
+
+fn boila_exists_bind(t: BoilaTable, inner: BoilaTable, a: str, b: str) -> Vec<str> {
+    let out: Vec<str> = vec_new()
+    let ia = boila_col_idx(inner, a)
+    let ib = boila_col_idx(inner, b)
+    let oa = boila_col_idx(t, a)
+    let ob = boila_col_idx(t, b)
+    if ia >= 0 && ob >= 0 && (ib < 0 || oa < 0) {
+        vec_push(out, b)
+        vec_push(out, a)
+        return out
+    }
+    if ib >= 0 && oa >= 0 {
+        vec_push(out, a)
+        vec_push(out, b)
+        return out
+    }
+    vec_push(out, "")
+    vec_push(out, "")
+    return out
+}
+
+fn boila_subq_filter(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, cols: Vec<BoilaColDef>, rows: Vec<Vec<BoilaVal>>, sel: BoilaSel) -> BoilaSubqOut !IO !Time !Par {
+    if sel.has_exists == 0 {
+        return BoilaSubqOut { s: s, txn: txn, ok: 1, err: "", state: "", rows: rows }
+    }
+    let ct = boila_cat_by_name_txn(s, txn, sel.exists_table)?
+    s = ct.s
+    if ct.ok == 0 {
+        return boila_subq_fail(s, txn, ct.err, ct.state)
+    }
+    let inner = ct.table
+    let mut lcol = sel.exists_lcol
+    let mut rcol = sel.exists_rcol
+    if sel.has_exists == 1 || sel.has_exists == 2 {
+        let bd = boila_exists_bind(t, inner, lcol, rcol)
+        lcol = vec_get(bd, 0)
+        rcol = vec_get(bd, 1)
+        if lcol == "" {
+            return boila_subq_fail(s, txn, "EXISTS WHERE колоните не се резолват (външна = вътрешна)", "42703")
+        }
+    }
+    let lix = boila_col_idx_of(cols, lcol)
+    if lix < 0 {
+        return boila_subq_fail(s, txn, concat("подзаявка: колона '", concat(lcol, "' липсва")), "42703")
+    }
+    let ridx = boila_col_idx(inner, rcol)
+    if ridx < 0 {
+        return boila_subq_fail(s, txn, concat("подзаявка вътрешна колона '", concat(rcol, "' липсва")), "42703")
+    }
+    let hb = boila_hj_build_pks(s, txn, inner, ridx)?
+    s = hb.s
+    txn = hb.txn
+    let out: Vec<Vec<BoilaVal>> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(rows) {
+        let row = vec_get(rows, i)
+        let mut hit: i64 = 0
+        if lix < vec_len(row) {
+            let v = vec_get(row, lix)
+            if v.tag != boila_v_null() {
+                if map_has(hb.ht, boila_val_enc(v)) == 1 {
+                    hit = 1
+                }
+            }
+        }
+        let mut keep: i64 = 0
+        if sel.has_exists == 1 || sel.has_exists == 3 {
+            keep = hit
+        } else {
+            keep = 1 - hit
+        }
+        if keep == 1 {
+            vec_push(out, row)
+        }
+        i = i + 1
+    }
+    return BoilaSubqOut { s: s, txn: txn, ok: 1, err: "", state: "", rows: out }
+}

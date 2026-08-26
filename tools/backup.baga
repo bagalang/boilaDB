@@ -1,0 +1,95 @@
+// backup.baga — boilaDB backup / verify / restore CLI (P26).
+//
+// Usage (repo root):
+//   BOILA_PATH=/tmp/db BACKUP_DEST=/tmp/bk BACKUP_MODE=create \
+//     ./baga -I . -I app-product app-product/boilaDB/tools/backup.baga
+//
+// Env:
+//   BACKUP_MODE   create | verify | restore   (default create)
+//   BOILA_PATH    live server root (create)
+//   BACKUP_DEST   backup directory (create dest / verify default)
+//   BACKUP_SRC    source directory (verify/restore; default BACKUP_DEST)
+//   BOILA_SHARDS / BOILA_FLUSH_AT / BOILA_COMPACT_AT / BOILA_MAX_DB
+//                 passed through to open (create)
+
+import "../server/databases.baga"
+import "../server/backup.baga"
+import "std/os/os.baga"
+import "std/str/str.baga"
+
+fn cfg(name: str, def: str) -> str !IO {
+    let v = env(name)?
+    if v == "" {
+        return def
+    }
+    return v
+}
+
+fn cfg_i(name: str, def: i64) -> i64 !IO {
+    let v = env(name)?
+    if v == "" {
+        return def
+    }
+    return parse_int(v)
+}
+
+fn print_bk(tag: str, bk: BoilaBk) {
+    if bk.stat.ok == 1 {
+        print(concat(concat(tag, " ok ndb="), int_to_str(bk.ndb)))
+        print(concat(" nfiles=", int_to_str(bk.stat.nfiles)))
+        print(concat(" nbytes=", int_to_str(bk.stat.nbytes)))
+    } else {
+        print(concat(concat(tag, " FAIL "), bk.err))
+        print(concat(" partial nfiles=", int_to_str(bk.stat.nfiles)))
+    }
+}
+
+fn main() -> i64 !IO !Time !Par {
+    let mode = cfg("BACKUP_MODE", "create")?
+    let dest = cfg("BACKUP_DEST", "/tmp/baga_boila_backup")?
+    let src = cfg("BACKUP_SRC", dest)?
+
+    if mode == "verify" {
+        let bk = boila_backup_verify(src)?
+        print_bk("verify", bk)
+        if bk.stat.ok == 1 {
+            return 0
+        }
+        return 1
+    }
+    if mode == "restore" {
+        if src == dest {
+            print("backup: BACKUP_SRC and BACKUP_DEST must differ for restore")
+            return 1
+        }
+        let bk = boila_backup_restore(src, dest)?
+        print_bk("restore", bk)
+        if bk.stat.ok == 1 {
+            return 0
+        }
+        return 1
+    }
+    let path = cfg("BOILA_PATH", "/tmp/baga_boila")?
+    let nshards = cfg_i("BOILA_SHARDS", 4)?
+    let flush_at = cfg_i("BOILA_FLUSH_AT", 256)?
+    let compact_at = cfg_i("BOILA_COMPACT_AT", 4)?
+    let max_db = cfg_i("BOILA_MAX_DB", 64)?
+    let mut srv = boila_server_open(path, nshards, flush_at, compact_at, max_db)?
+    if srv.ok == 0 {
+        print(concat("backup: open failed: ", path))
+        return 1
+    }
+    let cr = boila_backup_create(srv, dest)?
+    srv = cr.srv
+    boila_server_close(srv)?
+    print_bk("create", cr)
+    if cr.stat.ok == 0 {
+        return 1
+    }
+    let v = boila_backup_verify(dest)?
+    print_bk("verify", v)
+    if v.stat.ok == 1 {
+        return 0
+    }
+    return 1
+}

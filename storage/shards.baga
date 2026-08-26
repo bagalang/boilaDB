@@ -80,7 +80,12 @@ fn boila_open_mt(dir: str, nshards: i64, flush_at: i64, compact_at: i64) -> Boil
     let mus: Map<i64, i64> = map_new()
     let mut i: i64 = 0
     while i < c.n {
-        map_set(dbs, i, vec_get(c.shards, i))
+        // MT: без cross-request scan snapshot — pool + per-statement rewind
+        // правят кеша use-after-free (segfault в lsm_scan_keys_free_data).
+        let mut db = vec_get(c.shards, i)
+        db.scan_cache_off = 1
+        vec_set(c.shards, i, db)
+        map_set(dbs, i, db)
         map_set(mus, i, mutex_new())
         i = i + 1
     }

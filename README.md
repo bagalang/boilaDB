@@ -45,7 +45,8 @@ integrity: CHECK constraints, REFERENCES / foreign keys with ON DELETE
 numeric HAVING and window SUM/AVG/MIN/MAX over NUMERIC. v0.7 also ships
 `to_char` month/day names + AM/PM and unquoted NUMERIC literals.
 Concurrent HTTP + PG:
-bounded `BOILA_WORKERS` pool (default 4; `=0` → `go_bg` per conn),
+bounded `BOILA_WORKERS` pool (default 4; `=0` → `go_bg` per conn;
+idle keep-alive HTTP + PG is multiplexed onto the pool),
 hop-less per-shard stores, shared per-db plan cache. Data SQL is a
 shared lock; schema DDL is exclusive per database. PG wire TLS 1.3 when
 `BOILA_TLS_CERT`/`BOILA_TLS_KEY` are set (P22-3).

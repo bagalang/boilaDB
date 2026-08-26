@@ -1,0 +1,124 @@
+// http_route.baga — HTTP routes for serve + mux (health/ready/metrics/sql).
+
+import "httpdbaga/http.baga"
+import "metbaga/met.baga"
+import "http_sql.baga"
+import "http_auth.baga"
+import "http_guc.baga"
+import "serve_mt.baga"
+import "../server/databases.baga"
+import "../sql/plan_cache.baga"
+import "../txn/mvcc.baga"
+import "std/str/str.baga"
+
+fn boila_version() -> str {
+    return "0.7"
+}
+
+fn boila_seed() -> BoilaServer {
+    let names: Vec<str> = vec_new()
+    let stores: Vec<BoilaStore> = vec_new()
+    return BoilaServer {
+        meta: boila_store_empty(), root: "", names: names, stores: stores,
+        flush_at: 0, compact_at: 0, dflt_shards: 1, max_db: 1,
+        session_txn: boila_txn_new(), pc: boila_pc_new(), guc: map_new(), mt: 0, ok: 0
+    }
+}
+
+fn boila_route_mt(pack: i64, txn: BoilaTxn, sess_db: str, guc: Map<str, str>, req: Request) -> BoilaHttpSql !IO !Time !Par {
+    let method = http_method(req)
+    let path = http_path_only(req)
+    if path == "/sql" || path == "/metrics" {
+        let au = boila_mt_http_auth(pack, guc, req)?
+        guc = au.guc
+        if au.ok == 0 {
+            return boila_http_auth_fail_guc(txn, sess_db, guc)
+        }
+    }
+    if method == "GET" && path == "/health" {
+        boila_mt_stat_inc(pack, boila_st_http())?
+        let od = boila_mt_open_count(pack)?
+        let md = boila_mt_max_db(pack)?
+        let lv = boila_mt_live(pack)?
+        let mut body = "{\"status\":\"ok\",\"open_databases\":"
+        body = concat(body, int_to_str(od))
+        body = concat(body, ",\"max_db\":")
+        body = concat(body, int_to_str(md))
+        body = concat(body, ",\"live_conn\":")
+        body = concat(body, int_to_str(lv))
+        let wn = boila_mt_workers(pack)?
+        let mut mode = "mt-shard"
+        if wn > 0 {
+            mode = "mt-mux"
+        }
+        body = concat(body, ",\"mode\":\"")
+        body = concat(body, mode)
+        body = concat(body, "\",\"workers\":")
+        body = concat(body, int_to_str(wn))
+        body = concat(body, ",\"version\":\"")
+        body = concat(body, boila_version())
+        body = concat(body, "\"}")
+        return boila_http_pack(boila_seed(), txn, http_json_response(200, body), sess_db, guc)
+    }
+    if method == "GET" && path == "/ready" {
+        boila_mt_stat_inc(pack, boila_st_http())?
+        let lv = boila_mt_live(pack)?
+        let mc = boila_mt_max_conn(pack)?
+        let mut body = "{\"status\":"
+        let mut code: i64 = 200
+        if mc > 0 && lv >= mc {
+            body = concat(body, "\"not_ready\",\"reason\":\"max_conn\",\"live_conn\":")
+            body = concat(body, int_to_str(lv))
+            body = concat(body, ",\"max_conn\":")
+            body = concat(body, int_to_str(mc))
+            body = concat(body, "}")
+            code = 503
+        } else {
+            body = concat(body, "\"ready\",\"live_conn\":")
+            body = concat(body, int_to_str(lv))
+            body = concat(body, ",\"max_conn\":")
+            body = concat(body, int_to_str(mc))
+            body = concat(body, ",\"version\":\"")
+            body = concat(body, boila_version())
+            body = concat(body, "\"}")
+        }
+        return boila_http_pack(boila_seed(), txn, http_json_response(code, body), sess_db, guc)
+    }
+    if method == "GET" && path == "/metrics" {
+        let m = met_new()
+        let up = met_gauge(m, "boila_up", "alive")
+        met_set(m, up, 1)
+        let bi = met_gauge(m, "boila_build_info", concat("boilaDB build info version=", boila_version()))
+        met_set(m, bi, 1)
+        let od = met_gauge(m, "boila_databases_open", "open dbs")
+        met_set(m, od, boila_mt_open_count(pack)?)
+        let lc = met_gauge(m, "boila_conn_live", "live conns")
+        met_set(m, lc, boila_mt_live(pack)?)
+        let wk = met_gauge(m, "boila_workers", "pool workers (0=go_bg)")
+        met_set(m, wk, boila_mt_workers(pack)?)
+        let st = met_counter(m, "boila_sql_total", "SQL statements executed")
+        met_set(m, st, boila_mt_stat_get(pack, boila_st_sql())?)
+        let so = met_counter(m, "boila_sql_ok", "SQL statements ok")
+        met_set(m, so, boila_mt_stat_get(pack, boila_st_sql_ok())?)
+        let se = met_counter(m, "boila_sql_err", "SQL statements error")
+        met_set(m, se, boila_mt_stat_get(pack, boila_st_sql_err())?)
+        let hr = met_counter(m, "boila_http_requests", "HTTP requests")
+        met_set(m, hr, boila_mt_stat_get(pack, boila_st_http())?)
+        let pg = met_counter(m, "boila_pg_queries", "PG wire query executions")
+        met_set(m, pg, boila_mt_stat_get(pack, boila_st_pg())?)
+        let resp = http_set_header(http_response(200, met_render(m)), "Content-Type", "text/plain; version=0.0.4")
+        return boila_http_pack(boila_seed(), txn, resp, sess_db, guc)
+    }
+    if method == "POST" && path == "/sql" {
+        boila_mt_stat_inc(pack, boila_st_http())?
+        let db = boila_http_pick_db(sess_db, req)?
+        let sql = http_body(req)
+        let gt = boila_http_try_guc(txn, db, guc, sql)
+        if gt.hit == 1 {
+            return gt.r
+        }
+        let out = boila_mt_exec_guc(pack, txn, db, sql, guc)?
+        return boila_http_encode(out, sess_db, db, guc)?
+    }
+    return boila_http_pack(boila_seed(), txn, http_json_response(404, "{\"error\":\"not found\"}"), sess_db, guc)
+}

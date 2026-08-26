@@ -274,7 +274,8 @@ cell2 пакети (доказаният модел на rocksbaga MT и queueba
   (`BOILA_WORKERS`, default 4, cap 64; `0` = go_bg per-conn) изпълнява
   parse/plan/exec. При пълна опашка `chan_send` блокира accept
   (backpressure); над `BOILA_MAX_CONN` → `53300` и затваряне.
-  Keep-alive държи worker-а. Data SQL е shared lock; schema DDL —
+  Idle keep-alive (PG P31 + HTTP P32) is multiplexed onto the pool.
+  Data SQL е shared lock; schema DDL —
   exclusive (`api/serve_mt_lock.baga`).
 - **Shard собственост:** hop-less per-shard mutex — worker-ът заключва
   само шарда на ключа и мутира `LsmDB` под ключалката. Топъл checkout

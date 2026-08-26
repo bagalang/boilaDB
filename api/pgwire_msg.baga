@@ -188,6 +188,22 @@ fn pgw_read_msg(r: PgWReader) -> PgWMsg !IO !Net !Par {
     return PgWMsg { r: rr, ok: 1, typ: typ, body: body }
 }
 
+// 1 = a full regular message is already in the reader buffer (no socket).
+fn pgw_have_msg(r: PgWReader) -> i64 {
+    let avail = bytes_len(r.buf) - r.pos
+    if avail < 5 {
+        return 0
+    }
+    let ln = pgw_be_read(r.buf, r.pos + 1, 4) - 4
+    if ln < 0 {
+        return 0
+    }
+    if avail < 5 + ln {
+        return 0
+    }
+    return 1
+}
+
 // Startup-family съобщение (без type байт): len + code (+ params).
 struct PgWStartup {
     r: PgWReader,

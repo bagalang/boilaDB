@@ -4,11 +4,10 @@
 // pgwire.baga; Describe — в pgwire_desc.baga.
 
 import "pgwire.baga"
-import "pgwire_copy.baga"
 import "pgwire_msg.baga"
 import "pgwire_enc.baga"
 import "pgwire_auth.baga"
-import "pgwire_desc.baga"
+import "pgwire_on.baga"
 import "serve_mt.baga"
 import "../server/databases.baga"
 import "../txn/mvcc.baga"
@@ -183,156 +182,23 @@ fn boila_pg_serve_p(fd: i64, pack: i64, srv: BoilaServer) -> BoilaPgOut !IO !Net
         if m.ok == 0 {
             running = false
         } else {
+            let mut ie: i64 = 0
             if in_err {
-                if m.typ == 83 {                              // 'S' Sync
-                    let w = pgw_write(sp, pgw_ready(pgw_tx_status(sp)))?
-                    sp = w.sp
-                    if w.ok != 0 {
-                        running = false
-                    }
-                    in_err = false
-                } else {
-                    if m.typ == 88 {                          // 'X' по време на грешка
-                        running = false
-                    }
-                    // всичко останало се пропуска до Sync
-                }
-            } else {
-            if m.typ == 81 {                                  // 'Q' simple
-                let sql = pgw_cstr_read(m.body, 0)
-                let cin = pgw_copy_in_run(pack, srv2, sp, sql.s, rr)?
-                if cin.hit == 1 {
-                    rr = cin.rr
-                    if pack == 0 { srv2 = cin.srv }
-                    sp = cin.sess
-                    if cin.ok == 0 { running = false }
-                } else {
-                let ro = pgw_run_sql(pack, srv2, sp, sql.s, 1)?
-                // pack!=0: ro.srv е throwaway seed (алокиран след mem_mark).
-                // srv2 е track-нат; assign release-ва стария след rewind →
-                // rc underflow. Реалният сървър е в pack.
-                if pack == 0 {
-                    srv2 = ro.srv
-                }
-                sp = ro.sess
-                if ro.ok == 0 {
-                    running = false
-                }
-                }
-            } else {
-                if m.typ == 80 {                              // 'P' Parse
-                    sp = pgw_do_parse(m.body, sp)
-                    let w = pgw_write(sp, pgw_msg(49, bytes_new(0)))?   // '1'
-                    sp = w.sp
-                    if w.ok != 0 {
-                        running = false
-                    }
-                } else {
-                    if m.typ == 66 {                          // 'B' Bind
-                        sp = pgw_do_bind(m.body, sp)
-                        let w = pgw_write(sp, pgw_msg(50, bytes_new(0)))?   // '2'
-                        sp = w.sp
-                        if w.ok != 0 {
-                            running = false
-                        }
-                    } else {
-                        if m.typ == 68 {                      // 'D' Describe (W5)
-                            let dbuf = boila_pg_describe_buf(pack, srv2, sp.db, sp.stmts, sp.portals, m.body)?
-                            if pack == 0 {
-                                srv2 = dbuf.srv
-                            }
-                            let w = pgw_write(sp, dbuf.buf)?
-                            sp = w.sp
-                            if w.ok != 0 { running = false }
-                        } else {
-                            if m.typ == 69 {                  // 'E' Execute
-                                let pn = pgw_cstr_read(m.body, 0)
-                                let ro = pgw_exec_portal(pack, srv2, sp, pn.s)?
-                                if pack == 0 {
-                                    srv2 = ro.srv
-                                }
-                                sp = ro.sess
-                                if ro.ok == 0 {
-                                    running = false
-                                }
-                                if ro.sql_err == 1 {
-                                    in_err = true
-                                }
-                            } else {
-                                if m.typ == 83 {              // 'S' Sync
-                                    // MEM-4: извън explicit txn unnamed
-                                    // portal-ът умира на Sync (PG: край на
-                                    // implicit txn). Съдържанието се free-ва,
-                                    // но map записът ОСТАВА като inert
-                                    // (kind=-1): box-ът (~2 KB) се reuse-ва от
-                                    // следващия Bind, вместо del+нов alloc.
-                                    if sp.txn.active == 0 {
-                                        if map_has(sp.portals, "") == 1 {
-                                            let dp = map_get(sp.portals, "")
-                                            if dp.kind != 0 - 1 {
-                                                boila_pg_portal_free(dp)
-                                                let mut dp2 = dp
-                                                dp2.kind = 0 - 1
-                                                dp2.sql = ""
-                                                map_set(sp.portals, "", dp2)
-                                            }
-                                        }
-                                    }
-                                    let w = pgw_write(sp, pgw_ready(pgw_tx_status(sp)))?
-                                    sp = w.sp
-                                    if w.ok != 0 {
-                                        running = false
-                                    }
-                                } else {
-                                    if m.typ == 67 {          // 'C' Close
-                                        let nm = pgw_cstr_read(m.body, 1)
-                                        let kind = bytes_at(m.body, 0) & 255
-                                        if kind == 83 {
-                                            // MEM-4: Close на stmt — reclaim,
-                                            // ако никой portal не го реферира
-                                            if map_has(sp.stmts, nm.s) == 1 {
-                                                if boila_pg_stmt_orphaned(sp.portals, nm.s) == 1 {
-                                                    boila_pg_stmt_free(map_get(sp.stmts, nm.s))
-                                                }
-                                            }
-                                            map_del(sp.stmts, nm.s)
-                                        } else {
-                                            // MEM-4: Close reclaim-ва portal-а
-                                            if map_has(sp.portals, nm.s) == 1 {
-                                                boila_pg_portal_free(map_get(sp.portals, nm.s))
-                                            }
-                                            map_del(sp.portals, nm.s)
-                                        }
-                                        let w = pgw_write(sp, pgw_msg(51, bytes_new(0)))?   // '3'
-                                        sp = w.sp
-                                        if w.ok != 0 {
-                                            running = false
-                                        }
-                                    } else {
-                                        if m.typ == 88 {      // 'X' Terminate
-                                            running = false
-                                        } else {
-                                            if m.typ == 72 {  // 'H' Flush — no-op
-                                                let dummy = 0
-                                                if dummy == 1 {
-                                                    running = false
-                                                }
-                                            } else {
-                                                // непознато → ErrorResponse
-                                                let w = pgw_write(sp, pgw_error("0A000", concat("unsupported message ", int_to_str(m.typ))))?
-                                                sp = w.sp
-                                                if w.ok != 0 {
-                                                    running = false
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                ie = 1
             }
+            let t = pgw_on_msg(pack, srv2, sp, m, ie)?
+            rr = t.rr
+            sp = t.sess
+            if pack == 0 {
+                srv2 = t.srv
+            }
+            if t.in_err == 1 {
+                in_err = true
+            } else {
+                in_err = false
+            }
+            if t.running == 0 {
+                running = false
             }
         }
         // MEM-4: rewind на заявката — само при затворена txn; mark-ът

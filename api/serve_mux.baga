@@ -1,0 +1,71 @@
+// serve_mux.baga — shared poll mux helpers (P31 PG, P32 HTTP).
+// Idle fds sit in poll; a worker runs one turn then parks the fd.
+
+import "std/net/tcp.baga"
+import "std/str/str.baga"
+
+fn boila_mux_i32le(s: str, off: i64) -> i64 {
+    return (byte_at(s, off) & 255) + ((byte_at(s, off + 1) & 255) * 256) + ((byte_at(s, off + 2) & 255) * 65536) + ((byte_at(s, off + 3) & 255) * 16777216)
+}
+
+// pipe2(O_NONBLOCK|O_CLOEXEC). cell2(rfd, wfd); rfd < 0 on fail.
+fn boila_mux_pipe2() -> i64 !Net !IO {
+    let a = arena_new()
+    let p = arena_alloc(a, 8)
+    let rc = syscall(293, p, 526336, 0)?
+    if rc != 0 {
+        arena_free(a)
+        return cell2(0 - 1, 0 - 1)
+    }
+    let raw = mem_read(p, 8)?
+    let rfd = boila_mux_i32le(raw, 0)
+    let wfd = boila_mux_i32le(raw, 4)
+    arena_free(a)
+    return cell2(rfd, wfd)
+}
+
+fn boila_mux_vec_has(fds: Vec<i64>, fd: i64) -> i64 {
+    let mut i: i64 = 0
+    while i < vec_len(fds) {
+        if vec_get(fds, i) == fd {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+fn boila_mux_vec_drop(fds: Vec<i64>, fd: i64) -> Vec<i64> {
+    let nv: Vec<i64> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(fds) {
+        let f = vec_get(fds, i)
+        if f != fd {
+            vec_push(nv, f)
+        }
+        i = i + 1
+    }
+    return nv
+}
+
+fn boila_mux_wake(wfd: i64) -> i64 !Net !IO {
+    let _w = tcp_write(wfd, "w") catch !Net => 0 catch !IO => 0
+    return 0
+}
+
+fn boila_mux_idle_pull(idle: i64, fds: Vec<i64>) -> Vec<i64> !Par {
+    let mut out = fds
+    let mut more: i64 = 1
+    while more == 1 {
+        let t = chan_try_recv(idle)
+        if cell2_0(t) == 1 {
+            let fd = cell2_1(t)
+            if boila_mux_vec_has(out, fd) == 0 {
+                vec_push(out, fd)
+            }
+        } else {
+            more = 0
+        }
+    }
+    return out
+}

@@ -27,14 +27,14 @@ exists. See [security.md](security.md).
   "open_databases": 1,
   "max_db": 64,
   "live_conn": 2,
-  "mode": "mt-pool",
+  "mode": "mt-mux",
   "workers": 4,
   "version": "0.7"
 }
 ```
 
-`mode` is `mt-pool` when `BOILA_WORKERS > 0`, else `mt-shard`
-(`go_bg` per connection).
+`mode` is `mt-mux` when `BOILA_WORKERS > 0` (idle keep-alive is
+multiplexed onto the pool), else `mt-shard` (`go_bg` per connection).
 
 ### `GET /ready`
 
@@ -134,12 +134,14 @@ curl -s -X POST localhost:6570/sql --data "USE analytics"
 
 ## Keep-alive and transactions
 
-The accept loop is HTTP/1.1 keep-alive. `BEGIN` … `COMMIT` on the
-**same** TCP connection share one `BoilaTxn`. Closing the socket with
-an open transaction rolls it back.
+The accept loop is HTTP/1.1 keep-alive. Idle connections sit in
+`poll`; a worker runs one request then parks the fd (P32).
+`BEGIN` … `COMMIT` on the **same** TCP connection share one `BoilaTxn`.
+Closing the socket with an open transaction rolls it back.
 
-Per-request arena rewind (`mem_mark` / `mem_rewind`) runs after each
-statement that is not inside an open transaction.
+Per-request arena rewind (`mem_mark` / `mem_rewind`) runs on the
+`BOILA_WORKERS=0` path. The mux path does not rewind per turn
+(thread-local arena; shared plan cache).
 
 ## Auth on HTTP
 

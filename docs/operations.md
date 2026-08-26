@@ -12,7 +12,8 @@ One OS process, one listen socket per binary:
 | `tools/backup.baga` | — | Backup / verify / restore (P26) |
 
 Both servers: poll accept → bounded `BOILA_WORKERS` pool (default 4,
-cap 64) **or** `BOILA_WORKERS=0` → `go_bg` per connection. Over
+cap 64) **or** `BOILA_WORKERS=0` → `go_bg` per connection. Idle
+keep-alive (PG + HTTP) is multiplexed onto the pool (P31 / P32). Over
 `BOILA_MAX_CONN` the new fd is closed (HTTP 503 / PG `53300`).
 
 Data SQL takes a **shared** lock. Schema DDL

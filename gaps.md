@@ -5,6 +5,33 @@ V = value/codec/vector, K = key/scan, S = storage, M = metrics/monitoring,
 H = HTTP/API, Q = SQL (от P1), C = cache/planner, A = агрегати,
 T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
 
+## P32 — HTTP connection mux (opened 2026-08-26)
+
+- **H-ka — (FIXED P32) HTTP keep-alive pins 1 conn per worker.** Same
+  poll-idle mux as P31 (`api/http_mux.baga`, helpers in
+  `serve_mux.baga`). Gate: `tests/boila_http_mux_test` 2 workers × 8
+  keep-alive clients × 5 `POST /sql`. Residual: pipelined leftover
+  can pin a worker until the buffered request is complete. Mux does
+  not `mem_rewind` per turn: arena is `__thread`, SQL (plan cache)
+  lands in the request arena, rewind from a mux worker SIGSEGV-ва.
+  go_bg still rewinds because one thread owns the connection.
+
+## P31 — PG connection mux (opened 2026-08-26)
+
+- **W1-ka — (FIXED P31) keep-alive pins 1 PG conn per worker.** Idle
+  fds sit in `poll`; a worker runs startup or one drain-turn
+  (`pgw_on_msg` + leftover buffer) then parks the fd. Wake pipe so a
+  finished turn is polled without a 200 ms wait. Gate:
+  `tests/boila_pg_mux_test` 2 workers × 8 clients × 5 `SELECT 1`.
+  Residual: COPY IN / startup still block that worker; TLS is the
+  same POLLIN path; HTTP mux — P32; mux does not `mem_rewind` per
+  turn (thread-local arena + shared plan cache). `c>workers` SQL
+  still serializes on the pool, it just no longer hangs at handshake.
+  **Измерено 2026-08-26** pgbench point SELECT, 4 workers: c=1
+  **5118** tps; c=4 **12058**; c=8 **11994** (was hang); c=16
+  **6932** (was hang). Postgres on the same host: 15k / 49k / 72k /
+  93k. Insert c=1/4: 637 / 765 (fsync floor).
+
 ## P30 — delayed fsync (opened 2026-08-26)
 
 - **W9 — (FIXED P30, opt-in) INSERT 5k ops/s class.** `BOILA_SYNC_EVERY`
@@ -290,7 +317,7 @@ T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
   checkin е no-op (hop-less maps). Schema DDL още putback-ва.
   mt_ladder: 4w c=32 **7090**; 8w **5299** — 4 още печели (OS
   нишки + per-shard mutex). Residual: dedicated owner-нишка би
-  таксувала Q1; keep-alive = 1 conn на worker.
+  таксувала Q1. Keep-alive mux: PG P31, HTTP P32.
 - **P11-2 — (FIXED) wall deadline + max_scan/max_rows.** `BoilaBudget`
   begin at fetch; cooperative `boila_budget_tick` every 64 keys →
   57014 on timeout. Env `BOILA_BUDGET_MS` (default 5000; 0 = immediate).

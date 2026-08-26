@@ -35,8 +35,9 @@ file in v1. Unset variables use the defaults below.
 | `BOILA_WORKERS` | `4` | Bounded pool (cap 64). `0` = `go_bg` per connection |
 | `BOILA_MAX_CONN` | `64` | Admission cap. Over → HTTP 503 / PG `53300` |
 
-A full worker queue blocks `accept` (backpressure). Keep-alive holds
-the worker for the life of the connection.
+A full worker queue blocks `accept` (backpressure). PG wire and HTTP
+park idle keep-alive fds in `poll` and run one request-turn per worker
+(P31 / P32). `BOILA_WORKERS=0` is still `go_bg` per connection.
 
 ## Query budget and transactions
 

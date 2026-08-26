@@ -37,7 +37,9 @@ struct BoilaPgSess {
     // иначе — през суровия fd. Четене: виж PgWReader.tls.
     fd: i64,
     tls: i64,
-    tconn: TlsConn
+    tconn: TlsConn,
+    // P39: session handle кеш за data SQL (0 gmu на топъл път)
+    sc: BoilaMtSessCache
 }
 fn boila_pg_sess_new(db: str) -> BoilaPgSess {
     let sm: Map<str, BoilaPgStmt> = map_new()
@@ -46,7 +48,7 @@ fn boila_pg_sess_new(db: str) -> BoilaPgSess {
     return BoilaPgSess { stmts: sm, portals: pm, db: db, txn: boila_txn_new(), guc: guc,
         e_sel: boila_sel_empty(), e_ins: boila_ins_empty(),
         e_upd: boila_upd_empty(), e_del: boila_del_empty(),
-        fd: 0 - 1, tls: 0, tconn: tls_conn_bad("") }
+        fd: 0 - 1, tls: 0, tconn: tls_conn_bad(""), sc: boila_mt_sc_empty() }
 }
 struct BoilaPgOut {
     srv: BoilaServer,
@@ -173,6 +175,12 @@ fn pgw_run_sql(pack: i64, srv: BoilaServer, sess: BoilaPgSess, sql: str, send_re
             mem_persist_end()
         }
         return pgw_write_out(srv, sess, gh.out, send_ready)?
+    }
+    if pack != 0 {
+        // P39: data SQL през session handle кеша (0 gmu на топъл път)
+        let r = boila_mt_exec_guc_sc(pack, sess.txn, sess.db, sql, sess.guc, sess.sc)?
+        sess.sc = r.sc
+        return pgw_write_out(r.out.srv, sess, r.out, send_ready)?
     }
     let out = pgw_exec_locked(pack, srv, sess.txn, sess.db, sql, sess.guc)?
     // session guc (incl. boila.user) follows server after exec

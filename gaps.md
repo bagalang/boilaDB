@@ -5,6 +5,25 @@ V = value/codec/vector, K = key/scan, S = storage, M = metrics/monitoring,
 H = HTTP/API, Q = SQL (от P1), C = cache/planner, A = агрегати,
 T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
 
+## P39 — session handle кеш (opened 2026-08-26)
+
+- **M-gmu2 — (FIXED P39) 4 gmu → 2 на топъл data SQL.** `BoilaMtSessCache`
+  в BoilaPgSess: {cdb, cst, cstore, cpc, cepo}; топъл път прави само
+  per-db mu lock + epoch check + exec (note_pg/note_sql остават 2 gmu —
+  stats фаза). Инвалидация: rw[2] epoch, бумпва се при cold open, FIFO
+  eviction (`BoilaSrvDb.evicted`) и DDL. Капани хванати по пътя:
+  map_set(rw, 2) пускаше нов entry в worker arena → UAF след rewind
+  (persist wrap, същия клас като MEM-6); sc2 се строи в persist
+  (session state през turn-ове); epoch се чете атомично под gmu в
+  checkout_pc (race с eviction). **Измерено: tps неутрален** (gmu не е
+  бил стената — виж P37 PERF-1; workers горят в byte churn, не в lock
+  wait). Стойността е намалена lock секция + основа за stats фазата.
+  Gate: 63/65 boila теста (scram/ssl — pre-existing; p5 join_pc_hit —
+  фикс с LIMIT/OFFSET изключение в P36b cacheable правилото).
+  Residual: extended protocol (pgw_run_sel/ins/upd/del) и HTTP route
+  ползват некеширания път; eviction затваря store докато читател чете
+  (pre-existing race, незасегнат от epoch-а).
+
 ## P38 — packed refbit/pins (rocksbaga, opened 2026-08-26)
 
 - **PERF-2 — (FIXED P38) pin/unpin del+put churn на всяко block четене.**

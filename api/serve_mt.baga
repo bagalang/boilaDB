@@ -232,7 +232,7 @@ fn boila_mt_checkout(pack: i64, db: str) -> BoilaSrvDb !IO !Time !Par {
     if ix >= 0 {
         let store = vec_get(srv.stores, ix)
         mutex_unlock(gmu)
-        return BoilaSrvDb { srv: srv, ok: 1, err: "", state: "", store: store, name: db }
+        return BoilaSrvDb { srv: srv, ok: 1, err: "", state: "", store: store, name: db, evicted: "" }
     }
     let g = boila_srv_db(srv, db)?
     boila_mt_srv_write(m, g.srv)
@@ -299,24 +299,32 @@ struct BoilaMtCo {
     pc: BoilaPlanCache,
     ok: i64,
     err: str,
-    state: str
+    state: str,
+    // P39: db epoch прочетен атомично под gmu (за session handle кеша)
+    epoch: i64
 }
 
 // P34: checkout + pc_take с ЕДНО gmu вземане (беше 2 отделни на заявка).
 // Warm hit: lookup only (no srv_write). Cold: lazy open + write, същият lock.
+// P39: cold open/eviction бумпват db epoch; връща текущия epoch.
 fn boila_mt_checkout_pc(pack: i64, db: str) -> BoilaMtCo !IO !Time !Par {
     let gmu = boila_mt_gmu(pack)
     mutex_lock(gmu)
     let m: Map<i64, BoilaServer> = h_map(boila_mt_srv_h(pack))
     let srv = map_get(m, 0)
     let ix = boila_srv_find(srv, db)
-    let mut g: BoilaSrvDb = BoilaSrvDb { srv: srv, ok: 1, err: "", state: "", store: boila_store_empty(), name: db }
+    let mut g: BoilaSrvDb = BoilaSrvDb { srv: srv, ok: 1, err: "", state: "", store: boila_store_empty(), name: db, evicted: "" }
     if ix >= 0 {
-        g = BoilaSrvDb { srv: srv, ok: 1, err: "", state: "", store: vec_get(srv.stores, ix), name: db }
+        g = BoilaSrvDb { srv: srv, ok: 1, err: "", state: "", store: vec_get(srv.stores, ix), name: db, evicted: "" }
     } else {
         let g2 = boila_srv_db(srv, db)?
         boila_mt_srv_write(m, g2.srv)
         g = g2
+        // P39: open + eviction са epoch събития (gmu вече е взет → held=1)
+        boila_mt_epoch_bump_st(pack, db, 1)?
+        if g.evicted != "" {
+            boila_mt_epoch_bump_st(pack, g.evicted, 1)?
+        }
     }
     let pcs: Map<str, BoilaPlanCache> = h_map(boila_mt_pcs_h(pack))
     let mut pc = boila_pc_new()
@@ -329,8 +337,79 @@ fn boila_mt_checkout_pc(pack: i64, db: str) -> BoilaMtCo !IO !Time !Par {
         map_set(pcs, substr(db, 0, len(db)), pc)
         mem_persist_end()
     }
+    let epo = boila_mt_epoch_read_st(pack, db, 1)?
     mutex_unlock(gmu)
-    return BoilaMtCo { store: g.store, pc: pc, ok: g.ok, err: g.err, state: g.state }
+    return BoilaMtCo { store: g.store, pc: pc, ok: g.ok, err: g.err, state: g.state, epoch: epo }
+}
+
+// P39: session handle кеш — data SQL на същата база без gmu по топъл път.
+struct BoilaMtSessCache {
+    cdb: str,
+    cst: i64,
+    cstore: BoilaStore,
+    cpc: BoilaPlanCache,
+    cepo: i64
+}
+
+fn boila_mt_sc_empty() -> BoilaMtSessCache {
+    return BoilaMtSessCache { cdb: "", cst: 0, cstore: boila_store_empty(), cpc: boila_pc_new(), cepo: 0 - 1 }
+}
+
+struct BoilaMtScOut {
+    out: BoilaSrvOut,
+    sc: BoilaMtSessCache
+}
+
+// P39: като boila_mt_exec_guc, но с handle кеш: топъл път (k=0, същата база,
+// epoch съвпада) прави само per-db mu lock + exec — 0 gmu вземания.
+// Инвалидация: cold open / FIFO eviction / DDL бумпват rw[2] epoch-а.
+fn boila_mt_exec_guc_sc(pack: i64, txn: BoilaTxn, db: str, sql: str, guc: Map<str, str>, sc: BoilaMtSessCache) -> BoilaMtScOut !IO !Time !Par {
+    let k = boila_mt_kw2(sql)
+    if k != 0 {
+        // reg/DDL — старият път (DDL бумпва epoch в boila_mt_exec_guc)
+        let out = boila_mt_exec_guc(pack, txn, db, sql, guc)?
+        return BoilaMtScOut { out: out, sc: sc }
+    }
+    if sc.cdb == db && sc.cst != 0 {
+        let le = boila_mt_data_lock_st_epoch(sc.cst)?
+        if cell2_1(le) == sc.cepo {
+            let out = boila_exec_sql_mu(sc.cstore, txn, db, sql, sc.cpc, 0, guc)?
+            boila_mt_checkin_data(pack, db, out.s)
+            boila_mt_data_unlock_st(sc.cst)?
+            boila_mt_note_sql(pack, out.ok)?
+            return BoilaMtScOut {
+                out: BoilaSrvOut {
+                    srv: boila_mt_seed_srv(), txn: out.txn, ok: out.ok, err: out.err,
+                    state: out.state, kind: out.kind, res: out.res, id: out.id, db: db
+                },
+                sc: sc
+            }
+        }
+        boila_mt_data_unlock_st(sc.cst)?
+    }
+    // slow: стандартен flow + презареждане на кеша (epoch идва атомично от checkout)
+    let lst = boila_mt_data_lock(pack, db)?
+    let g = boila_mt_checkout_pc(pack, db)?
+    if g.ok == 0 {
+        boila_mt_data_unlock_st(lst)?
+        return BoilaMtScOut { out: boila_srv_out_fail(boila_mt_seed_srv(), txn, g.err, g.state), sc: sc }
+    }
+    let out = boila_exec_sql_mu(g.store, txn, db, sql, g.pc, 0, guc)?
+    boila_mt_checkin_data(pack, db, out.s)
+    boila_mt_data_unlock_st(lst)?
+    boila_mt_note_sql(pack, out.ok)?
+    // MEM-4 (P39): sc живее в сесията през turn-ове — persist (както
+    // stmts/portals/guc); cdb е копие (db може да е arena str).
+    mem_persist_begin()
+    let sc2 = BoilaMtSessCache { cdb: substr(db, 0, len(db)), cst: lst, cstore: g.store, cpc: g.pc, cepo: g.epoch }
+    mem_persist_end()
+    return BoilaMtScOut {
+        out: BoilaSrvOut {
+            srv: boila_mt_seed_srv(), txn: out.txn, ok: out.ok, err: out.err,
+            state: out.state, kind: out.kind, res: out.res, id: out.id, db: db
+        },
+        sc: sc2
+    }
 }
 
 // W2: bound SELECT AST path (no re-parse). Shared data lock (P11-1b).
@@ -392,6 +471,8 @@ fn boila_mt_exec_guc(pack: i64, txn: BoilaTxn, db: str, sql: str, guc: Map<str, 
     if k == 3 {
         boila_mt_checkin(pack, db, out.s)?
         boila_mt_pc_putback(pack, db, out.pc)?
+        // P39: DDL инвалидира session handle кешовете за тази база
+        boila_mt_epoch_bump_st(pack, db, 0)?
         boila_mt_schema_unlock(pack, db)?
     } else {
         boila_mt_checkin_data(pack, db, out.s)

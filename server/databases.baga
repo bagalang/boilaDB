@@ -47,7 +47,10 @@ struct BoilaSrvDb {
     err: str,
     state: str,
     store: BoilaStore,
-    name: str
+    name: str,
+    // P39: името на eviction-ната база при FIFO таван ("" = няма) —
+    // session handle кешът (P39) я invalidира през db epoch.
+    evicted: str
 }
 
 fn boila_store_empty() -> BoilaStore {
@@ -58,7 +61,7 @@ fn boila_store_empty() -> BoilaStore {
 }
 
 fn boila_srv_db_fail(srv: BoilaServer, msg: str, state: str) -> BoilaSrvDb {
-    return BoilaSrvDb { srv: srv, ok: 0, err: msg, state: state, store: boila_store_empty(), name: "" }
+    return BoilaSrvDb { srv: srv, ok: 0, err: msg, state: state, store: boila_store_empty(), name: "", evicted: "" }
 }
 
 fn boila_db_dir(root: str, name: str) -> str {
@@ -132,7 +135,7 @@ fn boila_srv_reg_get(srv: BoilaServer, name: str) -> BoilaSrvDb !IO !Time !Par {
     if vec_len(row) > 0 {
         n = vec_get(row, 0).i
     }
-    return BoilaSrvDb { srv: srv2, ok: 1, err: "", state: "", store: boila_store_empty(), name: int_to_str(n) }
+    return BoilaSrvDb { srv: srv2, ok: 1, err: "", state: "", store: boila_store_empty(), name: int_to_str(n), evicted: "" }
 }
 
 fn boila_server_open(root: str, nshards_default: i64, flush_at: i64, compact_at: i64, max_db: i64) -> BoilaServer !IO !Time !Par {
@@ -194,18 +197,20 @@ fn boila_server_close(srv: BoilaServer) -> i64 !IO !Par {
 fn boila_srv_db(srv: BoilaServer, name: str) -> BoilaSrvDb !IO !Time !Par {
     let ix = boila_srv_find(srv, name)
     if ix >= 0 {
-        return BoilaSrvDb { srv: srv, ok: 1, err: "", state: "", store: vec_get(srv.stores, ix), name: name }
+        return BoilaSrvDb { srv: srv, ok: 1, err: "", state: "", store: vec_get(srv.stores, ix), name: name, evicted: "" }
     }
     let reg = boila_srv_reg_get(srv, name)?
     let mut s2 = reg.srv
     if reg.ok == 0 {
-        return BoilaSrvDb { srv: s2, ok: 0, err: reg.err, state: reg.state, store: reg.store, name: "" }
+        return BoilaSrvDb { srv: s2, ok: 0, err: reg.err, state: reg.state, store: reg.store, name: "", evicted: "" }
     }
     let n = parse_int(reg.name)
     // FIFO eviction при таван
+    let mut evicted = ""
     if vec_len(s2.names) >= s2.max_db {
         let old = vec_get(s2.stores, 0)
         boila_close(old)?
+        evicted = vec_get(s2.names, 0)
         s2 = boila_srv_evict(s2, 0)
     }
     // MEM-4 (P33b): целият open е в persist региона — store-ът е shared,
@@ -222,7 +227,7 @@ fn boila_srv_db(srv: BoilaServer, name: str) -> BoilaSrvDb !IO !Time !Par {
     if st.ok == 0 {
         return boila_srv_db_fail(s2, concat("неуспешно отваряне на база '", concat(name, "'")), "XX000")
     }
-    return BoilaSrvDb { srv: s2, ok: 1, err: "", state: "", store: st, name: name }
+    return BoilaSrvDb { srv: s2, ok: 1, err: "", state: "", store: st, name: name, evicted: evicted }
 }
 
 // Write-back на мутиран store (каталог/данни) към отворения списък.
@@ -260,9 +265,11 @@ fn boila_srv_db_create(srv: BoilaServer, name: str) -> BoilaSrvDb !IO !Time !Par
     let row: Vec<BoilaVal> = vec_new()
     vec_push(row, boila_val_i64(n))
     s2.meta = boila_put(s2.meta, boila_cf_sys(), 1, boila_db_reg_pk(name), boila_row_enc(row))?
+    let mut evicted2 = ""
     if vec_len(s2.names) >= s2.max_db {
         let old = vec_get(s2.stores, 0)
         boila_close(old)?
+        evicted2 = vec_get(s2.names, 0)
         s2 = boila_srv_evict(s2, 0)
     }
     // MEM-4: persist име + grow (списъкът е shared, името е от заявката)
@@ -270,7 +277,7 @@ fn boila_srv_db_create(srv: BoilaServer, name: str) -> BoilaSrvDb !IO !Time !Par
     vec_push(s2.names, substr(name, 0, len(name)))
     vec_push(s2.stores, st)
     mem_persist_end()
-    return BoilaSrvDb { srv: s2, ok: 1, err: "", state: "", store: st, name: name }
+    return BoilaSrvDb { srv: s2, ok: 1, err: "", state: "", store: st, name: name, evicted: evicted2 }
 }
 
 // Чисти файлове на shard-път (wal/manifest/sst/bloom; толерантно към
@@ -295,7 +302,7 @@ fn boila_srv_db_drop(srv: BoilaServer, name: str, current: str) -> BoilaSrvDb !I
     let reg = boila_srv_reg_get(srv, name)?
     let mut s2 = reg.srv
     if reg.ok == 0 {
-        return BoilaSrvDb { srv: s2, ok: 0, err: reg.err, state: reg.state, store: reg.store, name: "" }
+        return BoilaSrvDb { srv: s2, ok: 0, err: reg.err, state: reg.state, store: reg.store, name: "", evicted: "" }
     }
     let n = parse_int(reg.name)
     // затвори ако е отворена
@@ -318,5 +325,5 @@ fn boila_srv_db_drop(srv: BoilaServer, name: str, current: str) -> BoilaSrvDb !I
     }
     // registry ред
     s2.meta = boila_del(s2.meta, boila_cf_sys(), 1, boila_db_reg_pk(name))?
-    return BoilaSrvDb { srv: s2, ok: 1, err: "", state: "", store: boila_store_empty(), name: name }
+    return BoilaSrvDb { srv: s2, ok: 1, err: "", state: "", store: boila_store_empty(), name: name, evicted: "" }
 }

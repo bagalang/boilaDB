@@ -100,7 +100,7 @@ fn boila_pg_mux_psess(s: BoilaPgSess, itxn: BoilaTxn) -> BoilaPgSess {
         txn: itxn, guc: pguc,
         e_sel: boila_sel_empty(), e_ins: boila_ins_empty(),
         e_upd: boila_upd_empty(), e_del: boila_del_empty(),
-        fd: s.fd, tls: s.tls, tconn: s.tconn
+        fd: s.fd, tls: s.tls, tconn: s.tconn, sc: boila_mt_sc_empty()
     }
     mem_persist_end()
     return ps
@@ -122,7 +122,7 @@ fn boila_pg_mux_park(mux: i64, fd: i64, live: BoilaPgLive, pempty: bytes) -> i64
     let ps = BoilaPgSess {
         stmts: s.stmts, portals: s.portals, db: s.db, txn: txn, guc: s.guc,
         e_sel: s.e_sel, e_ins: s.e_ins, e_upd: s.e_upd, e_del: s.e_del,
-        fd: s.fd, tls: s.tls, tconn: s.tconn
+        fd: s.fd, tls: s.tls, tconn: s.tconn, sc: s.sc
     }
     let pl = BoilaPgLive { rr: prr, sess: ps, started: live.started, in_err: live.in_err, itxn: live.itxn }
     let r = boila_pg_mux_put(mux, fd, pl)?

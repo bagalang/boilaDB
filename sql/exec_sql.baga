@@ -165,7 +165,18 @@ fn boila_exec_sql_mu(s: BoilaStore, txn: BoilaTxn, db: str, sql: str, pc: BoilaP
         while li < vec_len(lx.toks) {
             let tk = vec_get(lx.toks, li)
             if tk.kind == tok_num() || tk.kind == tok_str() {
-                cacheable = false
+                // LIMIT/OFFSET <num> са част от формата (стабилни ключове —
+                // boila_p5_test join_pc_hit); WHERE aid=5 варира → skip.
+                let mut ok_lit = false
+                if li > 0 {
+                    let pv = vec_get(lx.toks, li - 1)
+                    if tok_kw(pv, "limit") == 1 || tok_kw(pv, "offset") == 1 {
+                        ok_lit = true
+                    }
+                }
+                if ok_lit == false {
+                    cacheable = false
+                }
             }
             li = li + 1
         }

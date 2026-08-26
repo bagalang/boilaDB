@@ -65,6 +65,98 @@ fn boila_mt_data_unlock_st(st: i64) -> i64 !Par {
     return 0
 }
 
+// P39: rw[2] = store/schema epoch за тази база. Бумпва се при cold open,
+// eviction и DDL — session handle кешът (BoilaMtSessCache) се invalidира
+// при разминаване. Чете се под per-db mu (без gmu).
+fn boila_mt_rw_epoch(rw: Map<i64, i64>) -> i64 {
+    if map_has(rw, 2) == 1 {
+        return map_get(rw, 2)
+    }
+    return 0
+}
+
+// Data lock по кеширано st (само per-db mu, без gmu) + epoch под същия mu.
+// Връща cell2(mu_вид_няма_значение, epoch) — epoch-ът е на индекс 1.
+fn boila_mt_data_lock_st_epoch(st: i64) -> i64 !Time !Par {
+    let mu = cell2_0(st)
+    let rw: Map<i64, i64> = h_map(cell2_1(st))
+    let mut got: i64 = 0
+    let mut epo: i64 = 0
+    while got == 0 {
+        mutex_lock(mu)
+        if map_get(rw, 1) == 0 {
+            map_set(rw, 0, map_get(rw, 0) + 1)
+            epo = boila_mt_rw_epoch(rw)
+            got = 1
+        }
+        mutex_unlock(mu)
+        if got == 0 {
+            sleep_ms(1)
+        }
+    }
+    return cell2(0, epo)
+}
+
+// Epoch bump. gmu_held=1 → caller вече държи gmu (cold checkout/eviction);
+// dm lookup-ът тогава е без повторно вземане (pthread mutex е non-recursive).
+fn boila_mt_epoch_bump_st(pack: i64, db: str, gmu_held: i64) -> i64 !Par {
+    let mut st: i64 = 0
+    if gmu_held == 1 {
+        let dm: Map<str, i64> = h_map(boila_mt_dmu_h(pack))
+        if map_has(dm, db) == 1 {
+            st = map_get(dm, db)
+        } else {
+            mem_persist_begin()
+            let rw: Map<i64, i64> = map_new()
+            map_set(rw, 0, 0)
+            map_set(rw, 1, 0)
+            st = cell2(mutex_new(), map_h(rw))
+            map_set(dm, substr(db, 0, len(db)), st)
+            mem_persist_end()
+        }
+    } else {
+        st = boila_mt_db_st(pack, db)?
+    }
+    let mu = cell2_0(st)
+    let rw: Map<i64, i64> = h_map(cell2_1(st))
+    mutex_lock(mu)
+    // MEM-4: rw е shared — първият map_set(rw, 2, …) пуска НОВ entry;
+    // без persist той е в worker arena-та и умира при per-turn rewind
+    // (UAF при следващия epoch read). Същият клас като databases.baga:215.
+    mem_persist_begin()
+    map_set(rw, 2, boila_mt_rw_epoch(rw) + 1)
+    mem_persist_end()
+    mutex_unlock(mu)
+    return 0
+}
+
+// Epoch read (без bump) — същият gmu_held договор като bump-а.
+fn boila_mt_epoch_read_st(pack: i64, db: str, gmu_held: i64) -> i64 !Par {
+    let mut st: i64 = 0
+    if gmu_held == 1 {
+        let dm: Map<str, i64> = h_map(boila_mt_dmu_h(pack))
+        if map_has(dm, db) == 1 {
+            st = map_get(dm, db)
+        } else {
+            mem_persist_begin()
+            let rw: Map<i64, i64> = map_new()
+            map_set(rw, 0, 0)
+            map_set(rw, 1, 0)
+            st = cell2(mutex_new(), map_h(rw))
+            map_set(dm, substr(db, 0, len(db)), st)
+            mem_persist_end()
+        }
+    } else {
+        st = boila_mt_db_st(pack, db)?
+    }
+    let mu = cell2_0(st)
+    let rw: Map<i64, i64> = h_map(cell2_1(st))
+    mutex_lock(mu)
+    let epo = boila_mt_rw_epoch(rw)
+    mutex_unlock(mu)
+    return epo
+}
+
 fn boila_mt_data_unlock(pack: i64, db: str) -> i64 !Par {
     let st = boila_mt_db_st(pack, db)?
     let mu = cell2_0(st)

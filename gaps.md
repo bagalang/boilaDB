@@ -5,6 +5,15 @@ V = value/codec/vector, K = key/scan, S = storage, M = metrics/monitoring,
 H = HTTP/API, Q = SQL (от P1), C = cache/planner, A = агрегати,
 T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
 
+## P38 — packed refbit/pins (rocksbaga, opened 2026-08-26)
+
+- **PERF-2 — (FIXED P38) pin/unpin del+put churn на всяко block четене.**
+  `rocksbaga/cache/page.baga`: refbit map-ът пази val = pins*2 + ref
+  (отделната pins map отпадна); pin/unpin са set върху съществуващия
+  entry; pc_get hit пише refbit само когато е 0. tps неутрален
+  (map churn-ът се оказа широк и плитък — виж P37 PERF-1), но write
+  трафикът и persist натискът спадат. Gate: page_cache/kv/lsm тестове.
+
 ## P37 — stage-2 профил (opened 2026-08-26, диагноза без фикс)
 
 - **PERF-1 — alloc traffic е стената, не syscalls.** Alloc-site хистограма

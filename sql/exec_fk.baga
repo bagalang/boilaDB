@@ -16,6 +16,7 @@ import "../txn/mvcc.baga"
 import "../index/secondary.baga"
 import "ast.baga"
 import "exec_scan.baga"
+import "exec_fk_seek.baga"
 import "exec_agg_extra.baga"
 import "std/str/str.baga"
 import "std/bytes/bytes.baga"
@@ -61,22 +62,13 @@ fn boila_fk_enforce_row(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, row: Vec<Bo
                 if pcix < 0 {
                     return boila_fk_fail(s, txn, concat("FK родителска колона '", concat(fk.parent_col, "' не съществува")), "42703")
                 }
-                let f = boila_fetch_all(s, txn, pt)?
-                s = f.s
-                txn = f.txn
-                if f.ok == 0 {
-                    return boila_fk_fail(s, txn, f.err, f.state)
+                let hit = boila_fk_parent_hit(s, txn, pt, pcix, val)?
+                s = hit.s
+                txn = hit.txn
+                if hit.ok == 0 {
+                    return boila_fk_fail(s, txn, hit.err, hit.state)
                 }
-                let mut found: i64 = 0
-                let mut r: i64 = 0
-                while r < vec_len(f.rows) && found == 0 {
-                    let pr = vec_get(f.rows, r)
-                    if pcix < vec_len(pr) && boila_val_cmp(vec_get(pr, pcix), val) == 0 {
-                        found = 1
-                    }
-                    r = r + 1
-                }
-                if found == 0 {
+                if hit.found == 0 {
                     return boila_fk_fail(s, txn, concat("нарушен foreign key към '", concat(fk.parent_table, "' (редът не съществува)")), "23503")
                 }
             }
@@ -142,80 +134,72 @@ fn boila_fk_handle_parent_delete(s: BoilaStore, txn: BoilaTxn, t: BoilaTable, de
                     if fk.parent_table == t.name {
                         let pcol_idx = boila_fk_col_idx(t, fk.parent_col)
                         if pcol_idx >= 0 {
-                            // Set of deleted reference values (linear lookup).
-                            let delset: Map<str, i64> = map_new()
-                            let mut d: i64 = 0
-                            while d < vec_len(del_rows) {
-                                let drow = vec_get(del_rows, d)
+                            let mut d2: i64 = 0
+                            while d2 < vec_len(del_rows) {
+                                let drow = vec_get(del_rows, d2)
                                 if pcol_idx < vec_len(drow) {
                                     let dv = vec_get(drow, pcol_idx)
                                     if dv.tag != boila_v_null() {
-                                        map_set(delset, boila_bytes_hex(boila_val_enc(dv)), 1)
-                                    }
-                                }
-                                d = d + 1
-                            }
-                            let cf = boila_fetch_all(s, txn, ct)?
-                            s = cf.s
-                            txn = cf.txn
-                            if cf.ok == 0 {
-                                return boila_fk_fail(s, txn, cf.err, cf.state)
-                            }
-                            let mut r: i64 = 0
-                            while r < vec_len(cf.rows) {
-                                let crow = vec_get(cf.rows, r)
-                                if fk.col_idx < vec_len(crow) {
-                                    let cv = vec_get(crow, fk.col_idx)
-                                    if cv.tag != boila_v_null() && map_has(delset, boila_bytes_hex(boila_val_enc(cv))) == 1 {
-                                        if fk.on_delete == 0 {
-                                            return boila_fk_fail(s, txn, concat("нарушен foreign key: таблица '", concat(ct.name, "' реферира изтрит ред")), "23503")
+                                        let kids = boila_fk_child_rows(s, txn, ct, fk.col_idx, dv)?
+                                        s = kids.s
+                                        txn = kids.txn
+                                        if kids.ok == 0 {
+                                            return boila_fk_fail(s, txn, kids.err, kids.state)
                                         }
-                                        if ct.pk_idx >= 0 && ct.pk_idx < vec_len(crow) {
-                                            let cpk = boila_val_enc(vec_get(crow, ct.pk_idx))
-                                            if fk.on_delete == 1 {
-                                                let xd = boila_ix_del_all_txn(s, txn, ct, crow, cpk)
-                                                if xd.ok == 0 {
-                                                    return boila_fk_fail(s, txn, xd.err, xd.state)
-                                                }
-                                                txn = xd.txn
-                                                let rd = boila_txn_del(s, txn, boila_cf_data(), ct.id, cpk)
-                                                if rd.ok == 0 {
-                                                    return boila_fk_fail(s, txn, rd.err, rd.state)
-                                                }
-                                                txn = rd.txn
-                                            } else {
-                                                if fk.on_delete == 2 {
-                                                    let newrow: Vec<BoilaVal> = vec_new()
-                                                    let mut c2: i64 = 0
-                                                    while c2 < vec_len(crow) {
-                                                        if c2 == fk.col_idx {
-                                                            vec_push(newrow, boila_val_null())
-                                                        } else {
-                                                            vec_push(newrow, vec_get(crow, c2))
+                                        let mut r: i64 = 0
+                                        while r < vec_len(kids.rows) {
+                                            let crow = vec_get(kids.rows, r)
+                                            if fk.on_delete == 0 {
+                                                return boila_fk_fail(s, txn, concat("нарушен foreign key: таблица '", concat(ct.name, "' реферира изтрит ред")), "23503")
+                                            }
+                                            if ct.pk_idx >= 0 && ct.pk_idx < vec_len(crow) {
+                                                let cpk = boila_val_enc(vec_get(crow, ct.pk_idx))
+                                                if fk.on_delete == 1 {
+                                                    let xd = boila_ix_del_all_txn(s, txn, ct, crow, cpk)
+                                                    if xd.ok == 0 {
+                                                        return boila_fk_fail(s, txn, xd.err, xd.state)
+                                                    }
+                                                    txn = xd.txn
+                                                    let rd = boila_txn_del(s, txn, boila_cf_data(), ct.id, cpk)
+                                                    if rd.ok == 0 {
+                                                        return boila_fk_fail(s, txn, rd.err, rd.state)
+                                                    }
+                                                    txn = rd.txn
+                                                } else {
+                                                    if fk.on_delete == 2 {
+                                                        let newrow: Vec<BoilaVal> = vec_new()
+                                                        let mut c2: i64 = 0
+                                                        while c2 < vec_len(crow) {
+                                                            if c2 == fk.col_idx {
+                                                                vec_push(newrow, boila_val_null())
+                                                            } else {
+                                                                vec_push(newrow, vec_get(crow, c2))
+                                                            }
+                                                            c2 = c2 + 1
                                                         }
-                                                        c2 = c2 + 1
+                                                        let xd2 = boila_ix_del_all_txn(s, txn, ct, crow, cpk)
+                                                        if xd2.ok == 0 {
+                                                            return boila_fk_fail(s, txn, xd2.err, xd2.state)
+                                                        }
+                                                        txn = xd2.txn
+                                                        let rp = boila_txn_put(s, txn, boila_cf_data(), ct.id, cpk, boila_row_enc(newrow))
+                                                        if rp.ok == 0 {
+                                                            return boila_fk_fail(s, txn, rp.err, rp.state)
+                                                        }
+                                                        txn = rp.txn
+                                                        let xi = boila_ix_put_all_txn(s, txn, ct, newrow, cpk)
+                                                        if xi.ok == 0 {
+                                                            return boila_fk_fail(s, txn, xi.err, xi.state)
+                                                        }
+                                                        txn = xi.txn
                                                     }
-                                                    let xd2 = boila_ix_del_all_txn(s, txn, ct, crow, cpk)
-                                                    if xd2.ok == 0 {
-                                                        return boila_fk_fail(s, txn, xd2.err, xd2.state)
-                                                    }
-                                                    txn = xd2.txn
-                                                    let rp = boila_txn_put(s, txn, boila_cf_data(), ct.id, cpk, boila_row_enc(newrow))
-                                                    if rp.ok == 0 {
-                                                        return boila_fk_fail(s, txn, rp.err, rp.state)
-                                                    }
-                                                    txn = rp.txn
-                                                    let xi = boila_ix_put_all_txn(s, txn, ct, newrow, cpk)
-                                                    if xi.ok == 0 {
-                                                        return boila_fk_fail(s, txn, xi.err, xi.state)
-                                                    }
-                                                    txn = xi.txn
                                                 }
                                             }
+                                            r = r + 1
                                         }
                                     }
                                 }
-                                r = r + 1
+                                d2 = d2 + 1
                             }
                         }
                     }

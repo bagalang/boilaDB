@@ -5,6 +5,16 @@ V = value/codec/vector, K = key/scan, S = storage, M = metrics/monitoring,
 H = HTTP/API, Q = SQL (от P1), C = cache/planner, A = агрегати,
 T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
 
+## P29 — FK seek (opened 2026-08-26)
+
+- **R1b — (FIXED P29) FK parent/child lookup.** Child INSERT/UPDATE:
+  parent PK → `boila_txn_get`; else UNIQUE/secondary index on the
+  referenced column; else full scan. Parent DELETE: child index on the
+  FK column when present, else full scan. Same-txn parent INSERT is
+  visible (PK get / buffer). Gate: `boila_fk_test` same_txn_pk /
+  uniq_parent_* / child_ix_restrict. Residual: no covering lookup;
+  still enumerates all table names to find referencing children.
+
 ## P28 — N JOIN + subquery (opened 2026-08-26)
 
 - **J1 — (FIXED P28) more than one JOIN.** Cap 8; INNER/LEFT; equality
@@ -152,7 +162,8 @@ T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
   action (RESTRICT `23503` / CASCADE delete / SET NULL). Gate:
   `tests/boila_fk_test` 16/16 incl. restart. Residual: single-level
   cascade; child-row fts/hnsw/graph sync skipped on cascade; no
-  `ON UPDATE`; full-table scans (no index seek); self-FK untested.
+  `ON UPDATE`; self-FK untested. Parent/child lookup is PK or secondary
+  index when present (P29); full scan only if the column is unindexed.
 
 ## P20 — app-ready (opened 2026-08-15)
 

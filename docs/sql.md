@@ -46,6 +46,8 @@ exist (a NULL FK is allowed), else `23503`. Parent DELETE applies each
 referencing child FK: RESTRICT rejects with `23503`, CASCADE deletes
 the child rows, SET NULL nulls the child FK column. Cascade is
 single-level (no recursion through chained FKs).
+Parent lookup is a PK point GET or a secondary-index seek when the
+referenced column is indexed (P29); otherwise a table scan.
 
 **Not yet:** arrays, usable `FLOAT8` columns, `ON UPDATE` FK actions,
 `GROUPS` frames, `RANGE n PRECEDING/FOLLOWING`.

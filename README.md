@@ -36,7 +36,7 @@ the SQL flagship on top of the RocksDB-class engine:
 
 ## Status
 
-Phases **P0–P28** landed. Core + modalities (NUMERIC, window, COPY,
+Phases **P0–P29** landed. Core + modalities (NUMERIC, window, COPY,
 SCRAM, filter-GC, serializable, local FDW, raft replica), then the
 application-ready SQL surface — P20: UNIQUE indexes, NOT NULL / DEFAULT,
 SERIAL / BIGSERIAL, decimal SUM/AVG, `to_char`; and P21 schema
@@ -194,7 +194,7 @@ bash bench/boila/run_modality_benches.sh all
 |----------|----------|
 | **[docs/](docs/README.md)** | Getting started, SQL, HTTP, PG wire, config, security, ops |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Layers, concurrency, v1 bounds |
-| [PLAN.md](PLAN.md) | P0–P28 with measured gates |
+| [PLAN.md](PLAN.md) | P0–P29 with measured gates |
 | [gaps.md](gaps.md) | Honest residuals |
 | [kimi-deps.md](kimi-deps.md) | Import-discipline notes |
 

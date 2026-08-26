@@ -533,7 +533,7 @@ gaps. All sub-phases are application-agnostic.
   NULL FK, UPDATE, RESTRICT, CASCADE, SET NULL, restart). Residual:
   single-level cascade (no recursion through chained FKs); child-row
   modal sync (fts/hnsw/graph) skipped on cascade; `ON UPDATE` actions
-  not supported; parent/child scans are full-table (no index seek);
+  not supported; parent/child lookup is PK/index when present (P29);
   self-referencing FKs untested.
 
 ## P22 — Serve residuals
@@ -678,6 +678,20 @@ Application SQL that bagabuch currently splits into two queries.
 - **Gate:** `tests/boila_njoin_test` + `boila_p5_test` njoin_twice.
 - Residual: table.col in ORDER BY after N-join; correlated IN;
   subquery WHERE; JOIN … ON expressions; RIGHT/FULL.
+
+## P29 — FK seek (no full-table scan when indexed)
+
+Child INSERT/UPDATE against a REFERENCES parent used `boila_fetch_all`.
+Typical FKs point at a PRIMARY KEY.
+
+- Parent hit: PK → point GET (incl. txn buffer); else index on the
+  referenced column; else scan.
+- Parent DELETE: child rows via index on the FK column when present.
+- Files: `sql/exec_fk_seek.baga`, `sql/exec_fk.baga`.
+- **Gate:** `tests/boila_fk_test` same_txn_pk / uniq_parent_* /
+  child_ix_restrict (+ existing RESTRICT/CASCADE/SET NULL).
+- Residual: discovering which tables reference the parent is still a
+  catalog name scan; unindexed FK columns still fetch_all.
 
 ## Рискове
 - **`go/chan` само `i64`** → комуникация с shard нишките през канали +

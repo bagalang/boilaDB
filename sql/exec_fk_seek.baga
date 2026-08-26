@@ -1,0 +1,150 @@
+// exec_fk_seek.baga — P29: FK parent/child lookup without a full table
+// scan when the referenced column is the PK or has a secondary index.
+
+import "../storage/shards.baga"
+import "../core/codec.baga"
+import "../core/value.baga"
+import "../core/row.baga"
+import "../catalog/schema.baga"
+import "../txn/mvcc.baga"
+import "../index/secondary.baga"
+import "exec_scan.baga"
+import "std/bytes/bytes.baga"
+
+struct BoilaFkHit {
+    s: BoilaStore,
+    txn: BoilaTxn,
+    ok: i64,
+    err: str,
+    state: str,
+    found: i64
+}
+
+fn boila_fk_hit_ok(s: BoilaStore, txn: BoilaTxn, found: i64) -> BoilaFkHit {
+    return BoilaFkHit { s: s, txn: txn, ok: 1, err: "", state: "", found: found }
+}
+
+fn boila_fk_buf_has_col(txn: BoilaTxn, table_id: i64, cix: i64, val: BoilaVal) -> i64 {
+    let mut i: i64 = 0
+    while i < vec_len(txn.writes) {
+        let w = vec_get(txn.writes, i)
+        if w.cf == boila_cf_data() && w.table_id == table_id && w.is_del == 0 {
+            let row = boila_row_dec(w.row)
+            if cix >= 0 && cix < vec_len(row) {
+                if boila_val_cmp(vec_get(row, cix), val) == 0 {
+                    return 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+fn boila_fk_parent_hit(s: BoilaStore, txn: BoilaTxn, pt: BoilaTable, pcix: i64, val: BoilaVal) -> BoilaFkHit !IO !Time !Par {
+    if pcix == pt.pk_idx {
+        let g = boila_txn_get(s, txn, pt.id, boila_val_enc(val))?
+        return boila_fk_hit_ok(g.s, txn, g.found)
+    }
+    let ixid = boila_ix_by_col_t(pt, pcix)
+    if ixid >= 0 {
+        let lk = boila_ix_lookup(s, pt, ixid, val)?
+        s = lk.s
+        let mut j: i64 = 0
+        while j < vec_len(lk.pks) {
+            let g = boila_txn_get(s, txn, pt.id, vec_get(lk.pks, j))?
+            s = g.s
+            if g.found == 1 {
+                let row = boila_row_dec(g.row)
+                if pcix < vec_len(row) && boila_val_cmp(vec_get(row, pcix), val) == 0 {
+                    return boila_fk_hit_ok(s, txn, 1)
+                }
+            }
+            j = j + 1
+        }
+        if boila_fk_buf_has_col(txn, pt.id, pcix, val) == 1 {
+            return boila_fk_hit_ok(s, txn, 1)
+        }
+        return boila_fk_hit_ok(s, txn, 0)
+    }
+    if boila_fk_buf_has_col(txn, pt.id, pcix, val) == 1 {
+        return boila_fk_hit_ok(s, txn, 1)
+    }
+    let f = boila_fetch_all(s, txn, pt)?
+    s = f.s
+    txn = f.txn
+    if f.ok == 0 {
+        return BoilaFkHit { s: s, txn: txn, ok: 0, err: f.err, state: f.state, found: 0 }
+    }
+    let mut r: i64 = 0
+    while r < vec_len(f.rows) {
+        let pr = vec_get(f.rows, r)
+        if pcix < vec_len(pr) && boila_val_cmp(vec_get(pr, pcix), val) == 0 {
+            return boila_fk_hit_ok(s, txn, 1)
+        }
+        r = r + 1
+    }
+    return boila_fk_hit_ok(s, txn, 0)
+}
+
+struct BoilaFkKids {
+    s: BoilaStore,
+    txn: BoilaTxn,
+    ok: i64,
+    err: str,
+    state: str,
+    rows: Vec<Vec<BoilaVal>>
+}
+
+fn boila_fk_child_rows(s: BoilaStore, txn: BoilaTxn, ct: BoilaTable, cix: i64, val: BoilaVal) -> BoilaFkKids !IO !Time !Par {
+    let rows: Vec<Vec<BoilaVal>> = vec_new()
+    let ixid = boila_ix_by_col_t(ct, cix)
+    if cix == ct.pk_idx {
+        let g = boila_txn_get(s, txn, ct.id, boila_val_enc(val))?
+        s = g.s
+        if g.found == 1 {
+            vec_push(rows, boila_row_dec(g.row))
+        }
+        return BoilaFkKids { s: s, txn: txn, ok: 1, err: "", state: "", rows: rows }
+    }
+    if ixid >= 0 {
+        let lk = boila_ix_lookup(s, ct, ixid, val)?
+        s = lk.s
+        let mut j: i64 = 0
+        while j < vec_len(lk.pks) {
+            let g = boila_txn_get(s, txn, ct.id, vec_get(lk.pks, j))?
+            s = g.s
+            if g.found == 1 {
+                vec_push(rows, boila_row_dec(g.row))
+            }
+            j = j + 1
+        }
+        let mut wi: i64 = 0
+        while wi < vec_len(txn.writes) {
+            let w = vec_get(txn.writes, wi)
+            if w.cf == boila_cf_data() && w.table_id == ct.id && w.is_del == 0 {
+                let row = boila_row_dec(w.row)
+                if cix < vec_len(row) && boila_val_cmp(vec_get(row, cix), val) == 0 {
+                    vec_push(rows, row)
+                }
+            }
+            wi = wi + 1
+        }
+        return BoilaFkKids { s: s, txn: txn, ok: 1, err: "", state: "", rows: rows }
+    }
+    let f = boila_fetch_all(s, txn, ct)?
+    s = f.s
+    txn = f.txn
+    if f.ok == 0 {
+        return BoilaFkKids { s: s, txn: txn, ok: 0, err: f.err, state: f.state, rows: rows }
+    }
+    let mut r: i64 = 0
+    while r < vec_len(f.rows) {
+        let crow = vec_get(f.rows, r)
+        if cix < vec_len(crow) && boila_val_cmp(vec_get(crow, cix), val) == 0 {
+            vec_push(rows, crow)
+        }
+        r = r + 1
+    }
+    return BoilaFkKids { s: s, txn: txn, ok: 1, err: "", state: "", rows: rows }
+}

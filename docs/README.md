@@ -24,7 +24,7 @@ root (`ARCHITECTURE.md`, `PLAN.md`, `gaps.md`).
 | Document | Role |
 |----------|------|
 | [ARCHITECTURE.md](../ARCHITECTURE.md) | Modular monolith, layers, concurrency, v1 bounds |
-| [PLAN.md](../PLAN.md) | Phases P0–P28 and measured gates |
+| [PLAN.md](../PLAN.md) | Phases P0–P29 and measured gates |
 | [gaps.md](../gaps.md) | Honest residuals (fixed + still open) |
 | [kimi-deps.md](../kimi-deps.md) | One-way import discipline (`scripts/deps.sh`) |
 

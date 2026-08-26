@@ -5,6 +5,22 @@ V = value/codec/vector, K = key/scan, S = storage, M = metrics/monitoring,
 H = HTTP/API, Q = SQL (от P1), C = cache/planner, A = агрегати,
 T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
 
+## P37 — stage-2 профил (opened 2026-08-26, диагноза без фикс)
+
+- **PERF-1 — alloc traffic е стената, не syscalls.** Alloc-site хистограма
+  (return-address в baga_alloc, pgbench -S c=8): `baga_map_put` ~50% от
+  трафика (pin/unpin del+put на pc_read_at, mux live map del+put на turn,
+  refbit), `bytes_slice` ~19%, vec_grow/new/push ~12%. Per-thread CPU:
+  workers ~73% busy, ~210 µs CPU/заявка/worker; main dispatch ~47%,
+  ~34 µs/заявка. W=8: c=8/16/32 → 15.3k/15.7k/15.7k (+20% над W=4,
+  c=32 вече не регресира) — споделената сериализация (gmu ×4/заявка +
+  single main dispatch) държи тавана.
+- Следващи фази по тежест: (1) pc pin/unpin без map churn (inline pin в
+  page entry или request-scoped pin set, rocksbaga/cache/page.baga);
+  (2) mux park mutate-in-place (0.4 KB persist/turn); (3) lexer без
+  char-concat (sql/lexer.baga boila_substr/fold_lower); (4) stats без
+  gmu (per-worker counters, събиране при /metrics).
+
 ## P36 — lex веднъж (opened 2026-08-26)
 
 - **Q-lex — (FIXED P36) тройно лексване на всяка 'Q'.** `pgw_copy_in_run`

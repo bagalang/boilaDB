@@ -13,7 +13,7 @@ import "rocksbaga/db/shard_ttl.baga"
 fn boila_gc_set(s: BoilaStore, cutoff: i64) -> BoilaStore !Par {
     if s.dbs_h == 0 {
         let c = lsm_cluster_set_cutoff(s.c, cutoff)
-        return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: c.n, ok: c.ok }
+        return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: c.n, dual: s.dual, ok: c.ok }
     }
     boila_all_lock(s)?
     let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
@@ -39,7 +39,7 @@ fn boila_gc_on_end(s: BoilaStore) -> BoilaStore !Par {
 fn boila_compact_full(s: BoilaStore) -> BoilaStore !IO !Time !Par {
     if s.dbs_h == 0 {
         let c = lsm_cluster_compact_full(s.c)?
-        return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: c.n, ok: c.ok }
+        return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: c.n, dual: s.dual, ok: c.ok }
     }
     boila_all_lock(s)?
     let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
@@ -53,7 +53,7 @@ fn boila_compact_full(s: BoilaStore) -> BoilaStore !IO !Time !Par {
         i = i + 1
     }
     boila_all_unlock(s)?
-    return BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, ok: ok }
+    return BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, dual: s.dual, ok: ok }
 }
 
 struct BoilaVerCount {
@@ -78,7 +78,7 @@ fn boila_count_versions(s: BoilaStore, table_id: i64, pk: bytes) -> BoilaVerCoun
             i = i + 1
         }
         return BoilaVerCount {
-            s: BoilaStore { c: s.c, dbs_h: 0, mus_h: 0, n: s.c.n, ok: r.db.ok },
+            s: BoilaStore { c: s.c, dbs_h: 0, mus_h: 0, n: s.c.n, dual: s.dual, ok: r.db.ok },
             n: n
         }
     }

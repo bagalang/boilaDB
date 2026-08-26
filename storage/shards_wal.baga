@@ -115,7 +115,7 @@ fn boila_stmt_begin_mask(s: BoilaStore, mask: i64) -> BoilaStore !Par {
             }
             i = i + 1
         }
-        return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: c.n, ok: s.ok }
+        return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: c.n, dual: s.dual, ok: s.ok }
     }
     let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
     let mut i: i64 = 0
@@ -147,7 +147,7 @@ fn boila_stmt_commit_mask(s: BoilaStore, mask: i64) -> BoilaStore !IO !Time !Par
             }
             i = i + 1
         }
-        return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: c.n, ok: s.ok }
+        return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: c.n, dual: s.dual, ok: s.ok }
     }
     let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
     let mut i: i64 = 0

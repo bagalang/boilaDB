@@ -57,7 +57,7 @@ fn boila_store_empty() -> BoilaStore {
     let sh: Vec<LsmDB> = vec_new()
     let sk: Vec<bytes> = vec_new()
     let c = LsmCluster { shards: sh, n: 0, scan_epoch: 0 - 1, scan_pat: bytes_new(0), scan_keys: sk, ok: 0 }
-    return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: 0, ok: 0 }
+    return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: 0, dual: 0, ok: 0 }
 }
 
 fn boila_srv_db_fail(srv: BoilaServer, msg: str, state: str) -> BoilaSrvDb {
@@ -147,7 +147,7 @@ fn boila_server_open_mt(root: str, nshards_default: i64, flush_at: i64, compact_
     return boila_server_open_ex(root, nshards_default, flush_at, compact_at, max_db, 1)?
 }
 
-fn boila_open_store(dir: str, nshards: i64, flush_at: i64, compact_at: i64, mt: i64) -> BoilaStore !IO !Par {
+fn boila_open_store(dir: str, nshards: i64, flush_at: i64, compact_at: i64, mt: i64) -> BoilaStore !IO !Time !Par {
     if mt == 1 {
         return boila_open_mt(dir, nshards, flush_at, compact_at)?
     }

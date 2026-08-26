@@ -132,6 +132,7 @@ Published numbers (`bench/boila/results/`):
 | Insert @10k (P27, this host) | 678 / 724 ops/s (2 / 4 shards) | 2026-08-26 |
 | HTTP mt_ladder 4w c=32 | 7070 ops/s (+48% vs go_bg) | 2026-08-14 |
 | pgbench -S 4w c=1/4/8/16 (P33–P36) | **4.3k / 11.7k / 12.5k / 12.9k tps** | 2026-08-26 |
+| pgbench -S 4w c=1/4/8/16 (P43 dual get) | **15.2k / 51.6k / 89.1k / 109.1k tps** | 2026-08-26 |
 | FTS AND @20k docs | 73 µs | 2026-08-08 |
 | kNN 5k×128d | ~12 ms | gaps V2 |
 | time_bucket rollup @100k | ~2.9 ms | 2026-08-10 |

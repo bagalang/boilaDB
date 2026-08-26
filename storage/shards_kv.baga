@@ -7,14 +7,27 @@ import "rocksbaga/db/engine_scan.baga"
 import "../core/codec.baga"
 import "std/bytes/bytes.baga"
 
-fn boila_kv_get(db: LsmDB, cf: i64, base: bytes) -> LsmGet !IO !Time {
-    return boila_kv_get_asof(db, cf, base, 0 - 1)?
+fn boila_kv_get(db: LsmDB, cf: i64, base: bytes, dual: i64) -> LsmGet !IO !Time {
+    return boila_kv_get_asof(db, cf, base, 0 - 1, dual)?
 }
 
 // max_lsn < 0 → newest; else newest version with key lsn ≤ max_lsn.
-fn boila_kv_get_asof(db: LsmDB, cf: i64, base: bytes, max_lsn: i64) -> LsmGet !IO !Time {
+fn boila_kv_get_asof(db: LsmDB, cf: i64, base: bytes, max_lsn: i64, dual: i64) -> LsmGet !IO !Time {
     if boila_cf_versioned(cf) == 0 {
         return lsm_get_kb(db, base)?
+    }
+    // P43: точен probe на base ключа (dual-write newest) — без full-shard
+    // prefix scan на заявка. Miss → scan fallback само ако базата може да
+    // има legacy редове (dual=0); при dual=1 base miss = "няма такъв ред".
+    if max_lsn < 0 {
+        let g0 = lsm_get_kb(db, base)?
+        db = g0.db
+        if g0.found == 1 {
+            return LsmGet { db: db, found: 1, val: g0.val }
+        }
+        if dual == 1 {
+            return LsmGet { db: db, found: 0, val: bytes_new(0) }
+        }
     }
     let sc = lsm_scan_prefix_all_kb(db, base)?
     db = sc.db

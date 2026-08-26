@@ -5,6 +5,33 @@ V = value/codec/vector, K = key/scan, S = storage, M = metrics/monitoring,
 H = HTTP/API, Q = SQL (от P1), C = cache/planner, A = агрегати,
 T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
 
+## P43 — dual base key: O(1) versioned get (opened 2026-08-26)
+
+- **K9 — (FIXED P43) full-shard prefix scan на ВСЯКА versioned point
+  заявка.** `boila_kv_get_asof` резолвваше newest версия чрез
+  `lsm_scan_prefix_all_kb` (live fold над целия shard ~2500 записа ≈
+  150 µs) — открито чрез in-process разбивка: random txn_get 154 µs
+  срещу 1.3 µs const. Фикс по веригата:
+  (1) **dual-write**: `boila_put`/`boila_put_ex` пишат и base ключа със
+  същия [lsn][row] запис (boila_kv_del вече триеше и base);
+  (2) **GC keep rule** (rocksbaga compact_filter): base се пази, ако
+  стойността му съвпада с най-новата версия — преди това compaction
+  ТРИЕШЕ base ключовете при наличие на версии (клас legacy);
+  (3) **base probe** в asof при max_lsn<0;
+  (4) **dual маркер** `p43|dual` в sys CF при нова директория + поле
+  `BoilaStore.dual` — при dual=1 base miss = "няма ред" БЕЗ scan
+  (pgbench -S: 90% от заявките са aid извън seeded диапазона — всяка
+  плащаше full-shard scan). Стари бази (без маркер) → fallback както
+  преди (коректност запазена, 2× storage за data CF при нови бази).
+- **Измерено (pgbench -S, 4 workers, 10k реда, същият хост):**
+  c=1 **15.2k**, c=4 **51.6k**, c=8 **89.1k**, c=16 **109.1k tps**
+  (baseline от сутринта: 2.9k / 7.1k / 7.3k / 4.8k → **5.3×–22.6×**;
+  предишни postgres числа от същия ден: 15k / 49k / 72k / 93k →
+  **0.99× / 1.05× / 1.24× / 1.17× спрямо postgres**). In-process:
+  random txn_get 154 µs → 1.3 µs. Residual: RSS slope ~10 KB/заявка
+  остава (arena/glibc + persist — за production часове натоварване
+  трябва mutate-in-place park + runtime allocator фаза).
+
 ## P41 — shape cache (литерални заявки) (opened 2026-08-26)
 
 - **C2 — (FIXED P41) заявки с вариращ литерал никога не hit-ваха план

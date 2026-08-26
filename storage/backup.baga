@@ -35,7 +35,7 @@ fn boila_store_backup_create(s: BoilaStore, dest: str) -> BoilaStoreBk !IO !Time
     if s.dbs_h == 0 {
         let cr = lsm_cluster_backup_create(s.c, dest)?
         return BoilaStoreBk {
-            s: BoilaStore { c: cr.c, dbs_h: 0, mus_h: 0, n: cr.c.n, ok: cr.c.ok },
+            s: BoilaStore { c: cr.c, dbs_h: 0, mus_h: 0, n: cr.c.n, dual: s.dual, ok: cr.c.ok },
             stat: boila_bk_from_lsm(cr.stat)
         }
     }
@@ -55,7 +55,7 @@ fn boila_store_backup_create(s: BoilaStore, dest: str) -> BoilaStoreBk !IO !Time
     }
     boila_all_unlock(s)?
     return BoilaStoreBk {
-        s: BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, ok: s.c.ok },
+        s: BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, dual: s.dual, ok: s.c.ok },
         stat: boila_bk_from_lsm(cr2.stat)
     }
 }

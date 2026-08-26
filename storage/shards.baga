@@ -27,7 +27,12 @@ struct BoilaStore {
     dbs_h: i64,
     mus_h: i64,
     n: i64,
-    ok: i64
+    ok: i64,
+    // P43b: 1 = цялото съдържание е с dual base ключове (база създадена
+    // след P43 или маркирана) — versioned get при base miss НЯМА нужда
+    // от full-shard scan fallback (редът просто го няма). 0 = може да
+    // има legacy редове → scan fallback за коректност.
+    dual: i64
 }
 
 struct BoilaGet {
@@ -64,15 +69,30 @@ fn boila_apply_level_policy(c: LsmCluster) -> LsmCluster !IO {
     return c
 }
 
-fn boila_open(dir: str, nshards: i64, flush_at: i64, compact_at: i64) -> BoilaStore !IO !Par {
+fn boila_open(dir: str, nshards: i64, flush_at: i64, compact_at: i64) -> BoilaStore !IO !Time !Par {
+    let mut fresh: i64 = 0
+    if access(dir, 0) != 0 {
+        fresh = 1
+    }
     let mut c = lsm_cluster_open(dir, nshards, flush_at, compact_at)?
     c = boila_apply_level_policy(c)?
     c = lsm_cluster_apply_filter(c, 1, 0, boila_cf_data())
-    return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: c.n, ok: c.ok }
+    let mut s = BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: c.n, dual: 0, ok: c.ok }
+    // P43b: нова директория → маркер "цялата база е dual"; старите бази
+    // (директорията съществува) остават dual=0 → scan fallback.
+    if fresh == 1 {
+        s = boila_put(s, boila_cf_sys(), 1, bytes_of_str("p43|dual"), bytes_of_str("p43|dual"))?
+    }
+    let g = boila_get(s, boila_cf_sys(), 1, bytes_of_str("p43|dual"))?
+    return BoilaStore { c: g.s.c, dbs_h: 0, mus_h: 0, n: g.s.c.n, dual: g.found, ok: g.s.ok }
 }
 
 // Serve path: shards in shared Map + one mutex each (pre-insert all keys).
-fn boila_open_mt(dir: str, nshards: i64, flush_at: i64, compact_at: i64) -> BoilaStore !IO !Par {
+fn boila_open_mt(dir: str, nshards: i64, flush_at: i64, compact_at: i64) -> BoilaStore !IO !Time !Par {
+    let mut fresh: i64 = 0
+    if access(dir, 0) != 0 {
+        fresh = 1
+    }
     let mut c = lsm_cluster_open(dir, nshards, flush_at, compact_at)?
     c = boila_apply_level_policy(c)?
     c = lsm_cluster_apply_filter(c, 1, 0, boila_cf_data())
@@ -89,7 +109,12 @@ fn boila_open_mt(dir: str, nshards: i64, flush_at: i64, compact_at: i64) -> Boil
         map_set(mus, i, mutex_new())
         i = i + 1
     }
-    return BoilaStore { c: c, dbs_h: map_h(dbs), mus_h: map_h(mus), n: c.n, ok: c.ok }
+    let mut s = BoilaStore { c: c, dbs_h: map_h(dbs), mus_h: map_h(mus), n: c.n, dual: 0, ok: c.ok }
+    if fresh == 1 {
+        s = boila_put(s, boila_cf_sys(), 1, bytes_of_str("p43|dual"), bytes_of_str("p43|dual"))?
+    }
+    let g = boila_get(s, boila_cf_sys(), 1, bytes_of_str("p43|dual"))?
+    return BoilaStore { c: g.s.c, dbs_h: g.s.dbs_h, mus_h: g.s.mus_h, n: g.s.n, dual: g.found, ok: g.s.ok }
 }
 
 fn boila_close(s: BoilaStore) -> i64 !IO !Par {
@@ -149,17 +174,26 @@ fn boila_put(s: BoilaStore, cf: i64, table_id: i64, pk: bytes, val: bytes) -> Bo
     if s.dbs_h == 0 {
         let mut db = vec_get(s.c.shards, ix)
         db = lsm_put_kb(db, key, val)?
+        // P43: dual-write — base сочи най-новата версия (O(1) point get
+        // вместо full-shard prefix scan при всяка versioned заявка).
+        // val е същият [lsn 8][row] запис; boila_kv_del трие и base.
+        if boila_cf_versioned(cf) == 1 && bytes_len(val) >= 8 {
+            db = lsm_put_kb(db, base, val)?
+        }
         vec_set(s.c.shards, ix, db)
-        return BoilaStore { c: s.c, dbs_h: 0, mus_h: 0, n: s.c.n, ok: db.ok }
+        return BoilaStore { c: s.c, dbs_h: 0, mus_h: 0, n: s.c.n, dual: s.dual, ok: db.ok }
     }
     let mu = boila_shard_lock(s, ix)?
     let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
     let mut db = map_get(dbs, ix)
     db = lsm_put_kb(db, key, val)?
+    if boila_cf_versioned(cf) == 1 && bytes_len(val) >= 8 {
+        db = lsm_put_kb(db, base, val)?
+    }
     map_set(dbs, ix, db)
     let ok = db.ok
     mutex_unlock(mu)
-    return BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, ok: ok }
+    return BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, dual: s.dual, ok: ok }
 }
 
 // put with optional TTL (ttl_sec<=0 → plain put). Caller resolves TTL
@@ -174,33 +208,39 @@ fn boila_put_ex(s: BoilaStore, cf: i64, table_id: i64, pk: bytes, val: bytes, tt
     if s.dbs_h == 0 {
         let mut db = vec_get(s.c.shards, ix)
         db = lsm_put_ex_kb(db, key, val, ttl_sec)?
+        if boila_cf_versioned(cf) == 1 && bytes_len(val) >= 8 {
+            db = lsm_put_ex_kb(db, base, val, ttl_sec)?
+        }
         vec_set(s.c.shards, ix, db)
-        return BoilaStore { c: s.c, dbs_h: 0, mus_h: 0, n: s.c.n, ok: db.ok }
+        return BoilaStore { c: s.c, dbs_h: 0, mus_h: 0, n: s.c.n, dual: s.dual, ok: db.ok }
     }
     let mu = boila_shard_lock(s, ix)?
     let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
     let mut db = map_get(dbs, ix)
     db = lsm_put_ex_kb(db, key, val, ttl_sec)?
+    if boila_cf_versioned(cf) == 1 && bytes_len(val) >= 8 {
+        db = lsm_put_ex_kb(db, base, val, ttl_sec)?
+    }
     map_set(dbs, ix, db)
     let ok = db.ok
     mutex_unlock(mu)
-    return BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, ok: ok }
+    return BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, dual: s.dual, ok: ok }
 }
 
 fn boila_get(s: BoilaStore, cf: i64, table_id: i64, pk: bytes) -> BoilaGet !IO !Time !Par {
     let base = boila_key_row(cf, table_id, pk)
     let ix = lsm_shard_ix_b(s.n, base)
     if s.dbs_h == 0 {
-        let g = boila_kv_get(vec_get(s.c.shards, ix), cf, base)?
+        let g = boila_kv_get(vec_get(s.c.shards, ix), cf, base, s.dual)?
         vec_set(s.c.shards, ix, g.db)
         return BoilaGet {
-            s: BoilaStore { c: s.c, dbs_h: 0, mus_h: 0, n: s.c.n, ok: g.db.ok },
+            s: BoilaStore { c: s.c, dbs_h: 0, mus_h: 0, n: s.c.n, dual: s.dual, ok: g.db.ok },
             found: g.found, val: g.val
         }
     }
     let mu = boila_shard_lock(s, ix)?
     let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
-    let g = boila_kv_get(map_get(dbs, ix), cf, base)?
+    let g = boila_kv_get(map_get(dbs, ix), cf, base, s.dual)?
     map_set(dbs, ix, g.db)
     mutex_unlock(mu)
     return BoilaGet { s: s, found: g.found, val: g.val }
@@ -213,7 +253,7 @@ fn boila_del(s: BoilaStore, cf: i64, table_id: i64, pk: bytes) -> BoilaStore !IO
         if s.dbs_h == 0 {
             let mut db = lsm_del_kb(vec_get(s.c.shards, ix), base)?
             vec_set(s.c.shards, ix, db)
-            return BoilaStore { c: s.c, dbs_h: 0, mus_h: 0, n: s.c.n, ok: db.ok }
+            return BoilaStore { c: s.c, dbs_h: 0, mus_h: 0, n: s.c.n, dual: s.dual, ok: db.ok }
         }
         let mu = boila_shard_lock(s, ix)?
         let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
@@ -222,7 +262,7 @@ fn boila_del(s: BoilaStore, cf: i64, table_id: i64, pk: bytes) -> BoilaStore !IO
         map_set(dbs, ix, db)
         let ok = db.ok
         mutex_unlock(mu)
-        return BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, ok: ok }
+        return BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, dual: s.dual, ok: ok }
     }
     // Versioned data: sweep every shard. Routing is by user key, but a
     // leftover version hashed on the suffixed key must still be dropped.
@@ -244,7 +284,7 @@ fn boila_del(s: BoilaStore, cf: i64, table_id: i64, pk: bytes) -> BoilaStore !IO
         }
         i = i + 1
     }
-    return BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, ok: ok }
+    return BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, dual: s.dual, ok: ok }
 }
 
 // K2/K2b: true byte-prefix scan (no glob). pref = full key prefix
@@ -253,7 +293,7 @@ fn boila_scan_pref(s: BoilaStore, pref: bytes, cursor: i64, count: i64) -> Boila
     if s.dbs_h == 0 {
         let r = lsm_cluster_scan_prefix_kb(s.c, cursor, count, pref)?
         return BoilaScan {
-            s: BoilaStore { c: r.c, dbs_h: 0, mus_h: 0, n: r.c.n, ok: r.c.ok },
+            s: BoilaStore { c: r.c, dbs_h: 0, mus_h: 0, n: r.c.n, dual: s.dual, ok: r.c.ok },
             next: r.next, keys: r.keys
         }
     }
@@ -298,7 +338,7 @@ fn boila_scan_pref(s: BoilaStore, pref: bytes, cursor: i64, count: i64) -> Boila
         next = i
     }
     return BoilaScan {
-        s: BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, ok: ok },
+        s: BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, dual: s.dual, ok: ok },
         next: next, keys: keys
     }
 }
@@ -342,7 +382,7 @@ fn boila_scan_pref_all(s: BoilaStore, pref: bytes) -> BoilaScanAll !IO !Time !Pa
     if s.dbs_h == 0 {
         let r = lsm_cluster_scan_prefix_all_kb(s.c, pref)?
         return BoilaScanAll {
-            s: BoilaStore { c: r.c, dbs_h: 0, mus_h: 0, n: r.c.n, ok: r.c.ok },
+            s: BoilaStore { c: r.c, dbs_h: 0, mus_h: 0, n: r.c.n, dual: s.dual, ok: r.c.ok },
             keys: r.keys
         }
     }
@@ -368,7 +408,7 @@ fn boila_scan_pref_all(s: BoilaStore, pref: bytes) -> BoilaScanAll !IO !Time !Pa
     // mt: keys from shards interleave — sort for index range lower_bound
     sort_bytes(all)
     return BoilaScanAll {
-        s: BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, ok: ok },
+        s: BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, dual: s.dual, ok: ok },
         keys: all
     }
 }
@@ -376,7 +416,7 @@ fn boila_scan_pref_all(s: BoilaStore, pref: bytes) -> BoilaScanAll !IO !Time !Pa
 fn boila_flush(s: BoilaStore) -> BoilaStore !IO !Time !Par {
     if s.dbs_h == 0 {
         let c = lsm_cluster_flush_force(s.c)?
-        return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: c.n, ok: c.ok }
+        return BoilaStore { c: c, dbs_h: 0, mus_h: 0, n: c.n, dual: s.dual, ok: c.ok }
     }
     boila_all_lock(s)?
     let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
@@ -390,5 +430,5 @@ fn boila_flush(s: BoilaStore) -> BoilaStore !IO !Time !Par {
         i = i + 1
     }
     boila_all_unlock(s)?
-    return BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, ok: ok }
+    return BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, dual: s.dual, ok: ok }
 }

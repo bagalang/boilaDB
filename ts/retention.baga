@@ -44,7 +44,7 @@ fn boila_dbsize(s: BoilaStore) -> BoilaDbSize !IO !Time !Par {
     if s.dbs_h == 0 {
         let r = lsm_cluster_dbsize(s.c)?
         return BoilaDbSize {
-            s: BoilaStore { c: r.c, dbs_h: 0, mus_h: 0, n: r.c.n, ok: r.c.ok },
+            s: BoilaStore { c: r.c, dbs_h: 0, mus_h: 0, n: r.c.n, dual: s.dual, ok: r.c.ok },
             keys: r.n
         }
     }

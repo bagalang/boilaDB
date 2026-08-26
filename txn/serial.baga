@@ -15,16 +15,16 @@ fn boila_get_asof(s: BoilaStore, cf: i64, table_id: i64, pk: bytes, max_lsn: i64
     let base = boila_key_row(cf, table_id, pk)
     let ix = lsm_shard_ix_b(s.n, base)
     if s.dbs_h == 0 {
-        let g = boila_kv_get_asof(vec_get(s.c.shards, ix), cf, base, max_lsn)?
+        let g = boila_kv_get_asof(vec_get(s.c.shards, ix), cf, base, max_lsn, s.dual)?
         vec_set(s.c.shards, ix, g.db)
         return BoilaGet {
-            s: BoilaStore { c: s.c, dbs_h: 0, mus_h: 0, n: s.c.n, ok: g.db.ok },
+            s: BoilaStore { c: s.c, dbs_h: 0, mus_h: 0, n: s.c.n, dual: s.dual, ok: g.db.ok },
             found: g.found, val: g.val
         }
     }
     let mu = boila_shard_lock(s, ix)?
     let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
-    let g = boila_kv_get_asof(map_get(dbs, ix), cf, base, max_lsn)?
+    let g = boila_kv_get_asof(map_get(dbs, ix), cf, base, max_lsn, s.dual)?
     map_set(dbs, ix, g.db)
     mutex_unlock(mu)
     return BoilaGet { s: s, found: g.found, val: g.val }

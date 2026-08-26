@@ -17,7 +17,7 @@ fn boila_get_at(s: BoilaStore, ix: i64, cf: i64, table_id: i64, pk: bytes) -> Bo
         let g = lsm_get_kb(vec_get(s.c.shards, ix), key)?
         vec_set(s.c.shards, ix, g.db)
         return BoilaGet {
-            s: BoilaStore { c: s.c, dbs_h: 0, mus_h: 0, n: s.c.n, ok: g.db.ok },
+            s: BoilaStore { c: s.c, dbs_h: 0, mus_h: 0, n: s.c.n, dual: s.dual, ok: g.db.ok },
             found: g.found, val: g.val
         }
     }
@@ -38,7 +38,7 @@ fn boila_put_at(s: BoilaStore, ix: i64, cf: i64, table_id: i64, pk: bytes, val: 
         let mut db = vec_get(s.c.shards, ix)
         db = lsm_put_kb(db, key, val)?
         vec_set(s.c.shards, ix, db)
-        return BoilaStore { c: s.c, dbs_h: 0, mus_h: 0, n: s.c.n, ok: db.ok }
+        return BoilaStore { c: s.c, dbs_h: 0, mus_h: 0, n: s.c.n, dual: s.dual, ok: db.ok }
     }
     let mu = boila_shard_lock(s, ix)?
     let dbs: Map<i64, LsmDB> = h_map(s.dbs_h)
@@ -47,5 +47,5 @@ fn boila_put_at(s: BoilaStore, ix: i64, cf: i64, table_id: i64, pk: bytes, val: 
     map_set(dbs, ix, db)
     let ok = db.ok
     mutex_unlock(mu)
-    return BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, ok: ok }
+    return BoilaStore { c: s.c, dbs_h: s.dbs_h, mus_h: s.mus_h, n: s.n, dual: s.dual, ok: ok }
 }

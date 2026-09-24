@@ -243,6 +243,12 @@ IS [NOT] NULL AND OR NOT`), `ORDER BY … ASC|DESC [NULLS FIRST|LAST]`,
   Подзаявки — не. Window: `ROW_NUMBER`/`RANK`/`DENSE_RANK`/
   `SUM`/`AVG`/`COUNT`/`MIN`/`MAX` `OVER (PARTITION BY … ORDER BY …)`
   (P13; default RANGE UNBOUNDED PRECEDING).
+  WHERE-план: структурните слотове държат по едно условие от вид
+  (едно `=`, един range върху една колона, едно `LIKE`, едно `IN`…)
+  с индексно ускорение; когато клаузата иска повече (напр. две `=`),
+  тя се препарсва като един общ израз (dual evaluator, пълен скан +
+  филтър по ред) — същото важи за `UPDATE`/`DELETE`. Извън този
+  fallback остават `@@`, kNN, `EXISTS`, `IN (SELECT …)`.
 
 **Транзакции:** `BEGIN [READ ONLY] / COMMIT / ROLLBACK`, snapshot
 isolation (P17: `SERIALIZABLE` → `40001` на rw-конфликт), `$1..$n`

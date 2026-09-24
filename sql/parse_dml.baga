@@ -60,7 +60,56 @@ fn boila_pd_xw_guard(xtoks: Vec<Token>) -> BoilaWh {
 
 // Парсва cond-и от i; връща pos след последния cond. Non-structural
 // predicate (or top-level OR) → expression WHERE over the rest.
+// Q-xw-fallback: the structured DML slots hold one = / one >= / one <=.
+// When a WHERE needs more (e.g. two `=` predicates), reparse the whole
+// clause as one expression (per-row dual eval over target rows).
 fn boila_pd_where(l: BoilaLex, i: i64) -> BoilaWh {
+    let w = boila_pd_where_struct(l, i)
+    if w.ok == 1 {
+        return w
+    }
+    if w.state != "0A000" {
+        return w
+    }
+    // Constructs with no expression equivalent keep the original error.
+    let mut j = i
+    let mut scd: i64 = 0
+    let mut bad: i64 = 0
+    let mut scm = true
+    while scm {
+        let tc = boila_ps_tok(l, j)
+        if tc.kind == tok_eof() || tc.kind == tok_semi() {
+            scm = false
+        } else {
+            if scd == 0 && boila_ps_is_clause_kw(tc) == 1 {
+                scm = false
+            } else {
+                if tc.kind == tok_lparen() { scd = scd + 1 }
+                if tc.kind == tok_rparen() { scd = scd - 1 }
+                if tok_kw(tc, "exists") == 1 || tok_kw(tc, "select") == 1 { bad = 1 }
+                j = j + 1
+            }
+        }
+    }
+    if bad == 1 {
+        return w
+    }
+    let xe = boila_ps_expr_item(l, i)
+    if xe.ok == 0 {
+        return w
+    }
+    let gd = boila_pd_xw_guard(xe.item.xtoks)
+    if gd.ok == 0 {
+        return w
+    }
+    let mut out = boila_wh_empty()
+    out.has_xw = 1
+    out.xw_toks = xe.item.xtoks
+    out.pos = xe.pos
+    return out
+}
+
+fn boila_pd_where_struct(l: BoilaLex, i: i64) -> BoilaWh {
     let mut w = boila_wh_empty()
     let mut p = i
     // Q-xdml pre-scan: top-level OR → whole WHERE is one expression

@@ -20,7 +20,70 @@ fn boila_pw_fail(sel: BoilaSel, pos: i64, msg: str, state: str) -> BoilaParseWhe
     return BoilaParseWhere { ok: 0, sel: sel, pos: pos, err: msg, state: state }
 }
 
+// Q-xw-fallback: the structured slots hold at most one condition per kind.
+// When a WHERE needs more (e.g. two `=` predicates), reparse the whole
+// clause as one generic expression (full scan + per-row dual eval).
 fn boila_parse_where(l: BoilaLex, sel: BoilaSel, i: i64) -> BoilaParseWhere {
+    let r = boila_parse_where_struct(l, sel, i)
+    if r.ok == 1 {
+        return r
+    }
+    if r.state != "0A000" {
+        return r
+    }
+    if tok_kw(boila_ps_tok(l, i), "where") != 1 {
+        return r
+    }
+    // Constructs with no expression equivalent keep the original error:
+    // FTS @@, kNN <->/<=>/<#>, EXISTS, IN (SELECT …).
+    let mut j = i + 1
+    let mut scd: i64 = 0
+    let mut bad: i64 = 0
+    let mut scm = true
+    while scm {
+        let tc = boila_ps_tok(l, j)
+        if tc.kind == tok_eof() || tc.kind == tok_semi() {
+            scm = false
+        } else {
+            if scd == 0 && boila_ps_is_clause_kw(tc) == 1 {
+                scm = false
+            } else {
+                if tc.kind == tok_lparen() { scd = scd + 1 }
+                if tc.kind == tok_rparen() { scd = scd - 1 }
+                if tc.kind == tok_op() && (tc.txt == "@@" || tc.txt == "<->" || tc.txt == "<=>" || tc.txt == "<#>") { bad = 1 }
+                if tok_kw(tc, "exists") == 1 || tok_kw(tc, "select") == 1 { bad = 1 }
+                j = j + 1
+            }
+        }
+    }
+    if bad == 1 {
+        return r
+    }
+    let xe = boila_ps_expr_item(l, i + 1)
+    if xe.ok == 0 {
+        return r
+    }
+    if vec_len(xe.item.xtoks) >= 2 {
+        let f0 = vec_get(xe.item.xtoks, 0)
+        let f1 = vec_get(xe.item.xtoks, 1)
+        if f0.kind == tok_ident() && f1.kind == tok_lparen() && f0.txt != "cast" && f0.txt != "time_bucket" && f0.txt != "not" && boila_sfn_known(f0.txt) == 0 {
+            return r
+        }
+    }
+    let mut gg: i64 = 0
+    while gg < vec_len(xe.item.xtoks) {
+        let tg = vec_get(xe.item.xtoks, gg)
+        if tg.kind == tok_ident() && tg.txt == "generate_series" {
+            return r
+        }
+        gg = gg + 1
+    }
+    sel.has_xw = 1
+    sel.xw_toks = xe.item.xtoks
+    return BoilaParseWhere { ok: 1, sel: sel, pos: xe.pos, err: "", state: "" }
+}
+
+fn boila_parse_where_struct(l: BoilaLex, sel: BoilaSel, i: i64) -> BoilaParseWhere {
     if tok_kw(boila_ps_tok(l, i), "where") != 1 {
         return BoilaParseWhere { ok: 1, sel: sel, pos: i, err: "", state: "" }
     }

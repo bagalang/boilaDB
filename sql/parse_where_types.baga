@@ -1,0 +1,17 @@
+// parse_where_types.baga — типът за структуриран WHERE и fail helper (P3).
+// Листо в графа: не зависи от разбора, за да не се получават цикли
+// (xw → types, conds → types+xw).
+
+import "ast.baga"
+
+struct BoilaParseWhere {
+    ok: i64,
+    sel: BoilaSel,
+    pos: i64,
+    err: str,
+    state: str
+}
+
+fn boila_where_fail(sel: BoilaSel, pos: i64, msg: str, state: str) -> BoilaParseWhere {
+    return BoilaParseWhere { ok: 0, sel: sel, pos: pos, err: msg, state: state }
+}

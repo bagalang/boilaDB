@@ -1,0 +1,230 @@
+// parse_dml_stmt.baga — RETURNING + parser за UPDATE / DELETE (P3).
+// Изнесен от parse_dml.baga, за да остане той под 400 реда (§9).
+//
+// Граматика:
+//   UPDATE t SET col = lit [,...] [WHERE cond (AND cond)*] [RETURNING ...] [;]
+//   DELETE FROM t [WHERE cond (AND cond)*] [RETURNING ...] [;]
+//
+// Грешки: 42601 syntax, 0A000 feature_not_supported (< >, изражения).
+
+import "token.baga"
+import "lexer.baga"
+import "ast.baga"
+import "parse_select.baga"
+import "parse_common.baga"
+import "sfn.baga"
+import "../core/value.baga"
+import "std/str/str.baga"
+import "parse_dml_where.baga"
+
+// RETURNING (* | col,...) → ако има; pos след него.
+struct BoilaPdRet {
+    ok: i64, err: str, state: str, pos: i64,
+    has_ret: i64, ret_star: i64, ret_cols: Vec<str>
+}
+
+fn boila_pd_returning(l: BoilaLex, i: i64) -> BoilaPdRet {
+    let rc: Vec<str> = vec_new()
+    if tok_kw(boila_ps_tok(l, i), "returning") != 1 {
+        return BoilaPdRet { ok: 1, err: "", state: "", pos: i, has_ret: 0, ret_star: 0, ret_cols: rc }
+    }
+    let mut p = i + 1
+    let t = boila_ps_tok(l, p)
+    if t.kind == tok_star() {
+        return BoilaPdRet { ok: 1, err: "", state: "", pos: p + 1, has_ret: 1, ret_star: 1, ret_cols: rc }
+    }
+    let mut more = true
+    while more {
+        let c = boila_ps_tok(l, p)
+        if c.kind != tok_ident() {
+            return BoilaPdRet { ok: 0, err: "очаквах колона след RETURNING", state: "42601", pos: p, has_ret: 0, ret_star: 0, ret_cols: rc }
+        }
+        vec_push(rc, c.txt)
+        p = p + 1
+        if boila_ps_tok(l, p).kind == tok_comma() {
+            p = p + 1
+        } else {
+            more = false
+        }
+    }
+    return BoilaPdRet { ok: 1, err: "", state: "", pos: p, has_ret: 1, ret_star: 0, ret_cols: rc }
+}
+
+struct BoilaParseUpd {
+    ok: i64,
+    upd: BoilaUpd,
+    err: str,
+    state: str
+}
+
+fn boila_pu_fail(msg: str, state: str) -> BoilaParseUpd {
+    return BoilaParseUpd { ok: 0, upd: boila_upd_empty(), err: msg, state: state }
+}
+
+fn boila_parse_update(l: BoilaLex) -> BoilaParseUpd {
+    let mut upd = boila_upd_empty()
+    let mut i: i64 = 1
+    let tb = boila_ps_tok(l, i)
+    if tb.kind != tok_ident() {
+        return boila_pu_fail("очаквах име на таблица след UPDATE", "42601")
+    }
+    upd.table = tb.txt
+    i = i + 1
+    if tok_kw(boila_ps_tok(l, i), "set") != 1 {
+        return boila_pu_fail("очаквах SET след UPDATE", "42601")
+    }
+    i = i + 1
+    let mut sets = true
+    while sets {
+        let c = boila_ps_tok(l, i)
+        if c.kind != tok_ident() {
+            return boila_pu_fail("очаквах колона в SET", "42601")
+        }
+        if boila_ps_tok(l, i + 1).kind != tok_op() || boila_ps_tok(l, i + 1).txt != "=" {
+            return boila_pu_fail("очаквах '=' в SET", "42601")
+        }
+        let vt = boila_ps_tok(l, i + 2)
+        let mut is_lit: i64 = 0
+        if vt.kind == tok_num() || vt.kind == tok_dec() || vt.kind == tok_str() || vt.kind == tok_param() {
+            is_lit = 1
+        }
+        if vt.kind == tok_ident() && (tok_kw(vt, "null") == 1 || tok_kw(vt, "true") == 1 || tok_kw(vt, "false") == 1) {
+            is_lit = 1
+        }
+        // Q-xparam: bare lit only if nothing continues the expression
+        // (so `$1 || name` / `1 + col` take the expr path).
+        if is_lit == 1 {
+            let aft = boila_ps_tok(l, i + 3)
+            if aft.kind == tok_op() || aft.kind == tok_star() || aft.kind == tok_lparen() {
+                is_lit = 0
+            }
+            if aft.kind == tok_ident() && (tok_kw(aft, "and") == 1 || tok_kw(aft, "or") == 1 || tok_kw(aft, "between") == 1 || tok_kw(aft, "in") == 1 || tok_kw(aft, "like") == 1 || tok_kw(aft, "ilike") == 1 || tok_kw(aft, "is") == 1 || tok_kw(aft, "not") == 1) {
+                is_lit = 0
+            }
+        }
+        if is_lit == 1 {
+            let lit = boila_ps_literal(l, i + 2)
+            if lit.ok == 0 {
+                return boila_pu_fail(lit.err, lit.state)
+            }
+            vec_push(upd.set_cols, c.txt)
+            vec_push(upd.set_vals, lit.v)
+            let ex0: Vec<Token> = vec_new()
+            vec_push(upd.set_xtoks, ex0)
+            i = i + 3
+        } else {
+            // Q-xdml: SET col = <expr>, evaluated on the OLD row
+            let xe = boila_ps_expr_item(l, i + 2)
+            if xe.ok == 0 {
+                return boila_pu_fail(xe.err, xe.state)
+            }
+            let gd = boila_pd_xw_guard(xe.item.xtoks)
+            if gd.ok == 0 {
+                return boila_pu_fail(gd.err, gd.state)
+            }
+            vec_push(upd.set_cols, c.txt)
+            vec_push(upd.set_vals, boila_val_null())
+            vec_push(upd.set_xtoks, xe.item.xtoks)
+            i = xe.pos
+        }
+        if boila_ps_tok(l, i).kind == tok_comma() {
+            i = i + 1
+        } else {
+            sets = false
+        }
+    }
+    if tok_kw(boila_ps_tok(l, i), "where") == 1 {
+        let w = boila_pd_where(l, i + 1)
+        if w.ok == 0 {
+            return boila_pu_fail(w.err, w.state)
+        }
+        upd.eq_col = w.eq_col
+        upd.has_eq = w.has_eq
+        upd.pk_eq = w.v_eq
+        upd.lo_col = w.lo_col
+        upd.has_lo = w.has_lo
+        upd.pk_lo = w.v_lo
+        upd.hi_col = w.hi_col
+        upd.has_hi = w.has_hi
+        upd.pk_hi = w.v_hi
+        upd.has_xw = w.has_xw
+        upd.xw_toks = w.xw_toks
+        i = w.pos
+    }
+    let ret = boila_pd_returning(l, i)
+    if ret.ok == 0 {
+        return boila_pu_fail(ret.err, ret.state)
+    }
+    upd.has_ret = ret.has_ret
+    upd.ret_star = ret.ret_star
+    upd.ret_cols = ret.ret_cols
+    i = ret.pos
+    if boila_ps_tok(l, i).kind == tok_semi() {
+        i = i + 1
+    }
+    if boila_ps_tok(l, i).kind != tok_eof() {
+        let extra = boila_ps_tok(l, i)
+        return boila_pu_fail(concat("неочакван токен '", concat(extra.txt, "' в UPDATE")), "0A000")
+    }
+    return BoilaParseUpd { ok: 1, upd: upd, err: "", state: "" }
+}
+
+struct BoilaParseDel {
+    ok: i64,
+    del: BoilaDel,
+    err: str,
+    state: str
+}
+
+fn boila_pdel_fail(msg: str, state: str) -> BoilaParseDel {
+    return BoilaParseDel { ok: 0, del: boila_del_empty(), err: msg, state: state }
+}
+
+fn boila_parse_delete(l: BoilaLex) -> BoilaParseDel {
+    let mut del = boila_del_empty()
+    let mut i: i64 = 1
+    if tok_kw(boila_ps_tok(l, i), "from") != 1 {
+        return boila_pdel_fail("очаквах FROM след DELETE", "42601")
+    }
+    i = i + 1
+    let tb = boila_ps_tok(l, i)
+    if tb.kind != tok_ident() {
+        return boila_pdel_fail("очаквах име на таблица след DELETE FROM", "42601")
+    }
+    del.table = tb.txt
+    i = i + 1
+    if tok_kw(boila_ps_tok(l, i), "where") == 1 {
+        let w = boila_pd_where(l, i + 1)
+        if w.ok == 0 {
+            return boila_pdel_fail(w.err, w.state)
+        }
+        del.eq_col = w.eq_col
+        del.has_eq = w.has_eq
+        del.pk_eq = w.v_eq
+        del.lo_col = w.lo_col
+        del.has_lo = w.has_lo
+        del.pk_lo = w.v_lo
+        del.hi_col = w.hi_col
+        del.has_hi = w.has_hi
+        del.pk_hi = w.v_hi
+        del.has_xw = w.has_xw
+        del.xw_toks = w.xw_toks
+        i = w.pos
+    }
+    let ret = boila_pd_returning(l, i)
+    if ret.ok == 0 {
+        return boila_pdel_fail(ret.err, ret.state)
+    }
+    del.has_ret = ret.has_ret
+    del.ret_star = ret.ret_star
+    del.ret_cols = ret.ret_cols
+    i = ret.pos
+    if boila_ps_tok(l, i).kind == tok_semi() {
+        i = i + 1
+    }
+    if boila_ps_tok(l, i).kind != tok_eof() {
+        let extra = boila_ps_tok(l, i)
+        return boila_pdel_fail(concat("неочакван токен '", concat(extra.txt, "' в DELETE")), "0A000")
+    }
+    return BoilaParseDel { ok: 1, del: del, err: "", state: "" }
+}

@@ -5,6 +5,21 @@ V = value/codec/vector, K = key/scan, S = storage, M = metrics/monitoring,
 H = HTTP/API, Q = SQL (от P1), C = cache/planner, A = агрегати,
 T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
 
+## MEM-7 — persist malloc (opened 2026-10-01)
+
+- **MEM-7 — (FIXED) cross-thread persist drop не връщаше паметта.**
+  Persist регионът беше thread-local bump. `drop()` от друг worker
+  слагаше блока в неговия freelist, а slab-ът оставаше в нишката, която
+  го е заделила. При `BOILA_WORKERS=8` hot span, page cache и scan
+  snapshot се местят между нишките на всяка заявка и RSS расте линейно
+  до тавана на контейнера. Сега persist алокацията е отделен `malloc`,
+  а `drop`/`baga_free` вика `free()` — връща се от коя да е нишка.
+  Gate: `tests/persist_xthread_test.baga` — 20000 × 8 KB, пуснати от
+  друга нишка, RSS +2.4 MB (преди: до 160 MB). `mem_rewind_test` зелен.
+- **Остатък:** 8 KB reader scratch и session maps на отворена връзка
+  още живеят до disconnect (пулът държи малко връзки). Park leftover
+  в `pgw_fill_append` вече се `drop`-ва след копието.
+
 ## P43 — dual base key: O(1) versioned get (opened 2026-08-26)
 
 - **K9 — (FIXED P43) full-shard prefix scan на ВСЯКА versioned point

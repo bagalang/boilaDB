@@ -141,10 +141,24 @@ fn pgw_first_word(sql: str) -> str {
 
 // Append one chunk of inbound data, preserving the transport fields.
 fn pgw_fill_append(rr: PgWReader, chunk: bytes) -> PgWReader {
+    // MEM-7: остатъкът от миналия park е persist. След копието се пуска,
+    // иначе всяко четене го зарязва (при 8 worker-а — в чужда нишка).
+    // Празният споделен буфер (len 0) не се пипа.
+    let old = rr.buf
     if rr.pos > 0 {
-        return PgWReader { fd: rr.fd, buf: bytes_concat(bytes_slice(rr.buf, rr.pos, bytes_len(rr.buf)), chunk), pos: 0, tls: rr.tls, tconn: rr.tconn, scratch: rr.scratch }
+        let tail = bytes_slice(old, rr.pos, bytes_len(old))
+        let nb = bytes_concat(tail, chunk)
+        drop(tail)
+        if bytes_len(old) > 0 {
+            drop(old)
+        }
+        return PgWReader { fd: rr.fd, buf: nb, pos: 0, tls: rr.tls, tconn: rr.tconn, scratch: rr.scratch }
     }
-    return PgWReader { fd: rr.fd, buf: bytes_concat(rr.buf, chunk), pos: rr.pos, tls: rr.tls, tconn: rr.tconn, scratch: rr.scratch }
+    let nb = bytes_concat(old, chunk)
+    if bytes_len(old) > 0 {
+        drop(old)
+    }
+    return PgWReader { fd: rr.fd, buf: nb, pos: 0, tls: rr.tls, tconn: rr.tconn, scratch: rr.scratch }
 }
 
 fn pgw_fill(r: PgWReader, n: i64) -> PgWFill !IO !Net !Par {

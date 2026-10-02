@@ -45,8 +45,10 @@ fn boila_pg_mux_take(mux: i64, fd: i64) -> BoilaPgLive !Par {
     mutex_lock(mu)
     let m: Map<i64, BoilaPgLive> = h_map(cell2_1(mux))
     if map_has(m, fd) == 1 {
+        // MEM-8: не трий. map_del пускаше само entry-то, а box-ът на
+        // BoilaPgLive оставаше. Следващият park правеше нов malloc.
+        // map_set върху същия fd презаписва същия box.
         let live = map_get(m, fd)
-        map_del(m, fd)
         mutex_unlock(mu)
         return live
     }
@@ -67,6 +69,37 @@ fn boila_pg_mux_close(fd: i64, sess: BoilaPgSess) -> i64 !IO !Par {
     }
     tcp_close(fd)?
     return 0
+}
+
+// Маха fd от mux картата. С MEM-8 map_del пуска и box-а на live.
+fn boila_pg_mux_forget(mux: i64, fd: i64) -> i64 !Par {
+    let mu = cell2_0(mux)
+    mutex_lock(mu)
+    let m: Map<i64, BoilaPgLive> = h_map(cell2_1(mux))
+    if map_has(m, fd) == 1 {
+        map_del(m, fd)
+    }
+    mutex_unlock(mu)
+    return 0
+}
+
+// Буферът и картите на сесията не са вътре в box-а като отделни malloc-и
+// само ако ги drop-нем. Scratch (str) рантаймът не пуска. Под --rc del
+// вече е release — тук не пипаме.
+fn boila_pg_mux_release(live: BoilaPgLive) {
+    if rc_on() == 1 {
+        return
+    }
+    let b = live.rr.buf
+    if bytes_len(b) > 0 {
+        drop(b)
+    }
+    let sm = live.sess.stmts
+    drop(sm)
+    let pm = live.sess.portals
+    drop(pm)
+    let gu = live.sess.guc
+    drop(gu)
 }
 
 // P33b: per-turn rewind в mux (същата MEM-4 идиома като per-conn цикъла в
@@ -107,11 +140,13 @@ fn boila_pg_mux_psess(s: BoilaPgSess, itxn: BoilaTxn) -> BoilaPgSess {
 }
 
 // Паркиране: преизгражда live в persist региона и го слага в mux картата.
+// Ключът вече е в картата (take не го трие) — map_set презаписва box-а.
 fn boila_pg_mux_park(mux: i64, fd: i64, live: BoilaPgLive, pempty: bytes) -> i64 !Par {
+    let old = live.rr.buf
     mem_persist_begin()
     let mut nb = pempty
-    if live.rr.pos < bytes_len(live.rr.buf) {
-        nb = bytes_slice(live.rr.buf, live.rr.pos, bytes_len(live.rr.buf))
+    if live.rr.pos < bytes_len(old) {
+        nb = bytes_slice(old, live.rr.pos, bytes_len(old))
     }
     let prr = PgWReader { fd: fd, buf: nb, pos: 0, tls: live.rr.tls, tconn: live.rr.tconn, scratch: live.rr.scratch }
     let s = live.sess
@@ -127,6 +162,14 @@ fn boila_pg_mux_park(mux: i64, fd: i64, live: BoilaPgLive, pempty: bytes) -> i64
     let pl = BoilaPgLive { rr: prr, sess: ps, started: live.started, in_err: live.in_err, itxn: live.itxn }
     let r = boila_pg_mux_put(mux, fd, pl)?
     mem_persist_end()
+    // Споделеният празен pempty е len 0 и не се пипа. Пълен буфер
+    // (arena от хода или persist leftover) се пуска след копието.
+    // Под --rc map_set release-ва старото поле — втори drop е двоен.
+    if rc_on() == 0 {
+        if bytes_len(old) > 0 {
+            drop(old)
+        }
+    }
     return r
 }
 
@@ -201,6 +244,8 @@ fn boila_pg_mux_turn(pack: i64, mux: i64, fd: i64, pempty: bytes) -> i64 !IO !Ne
     if live.started == 0 {
         let st = pgw_serve_startup(fd, pack, boila_mt_seed_srv())?
         if st.ok == 0 || st.done == 0 {
+            boila_pg_mux_forget(mux, fd)?
+            boila_pg_mux_release(live)
             return 0
         }
         live.started = 1
@@ -208,6 +253,8 @@ fn boila_pg_mux_turn(pack: i64, mux: i64, fd: i64, pempty: bytes) -> i64 !IO !Ne
         live.sess = boila_pg_mux_psess(st.sess, live.itxn)
         live = boila_pg_mux_drain(pack, live, 0)?
         if live.started == 0 - 2 {
+            boila_pg_mux_forget(mux, fd)?
+            boila_pg_mux_release(live)
             boila_pg_mux_close(fd, live.sess)?
             if have_mark && live.sess.txn.active == 0 && live.sess.tls == 0 {
                 mem_rewind(rmark)
@@ -222,6 +269,8 @@ fn boila_pg_mux_turn(pack: i64, mux: i64, fd: i64, pempty: bytes) -> i64 !IO !Ne
     }
     live = boila_pg_mux_drain(pack, live, 1)?
     if live.started == 0 - 2 {
+        boila_pg_mux_forget(mux, fd)?
+        boila_pg_mux_release(live)
         boila_pg_mux_close(fd, live.sess)?
         if have_mark && live.sess.txn.active == 0 && live.sess.tls == 0 {
             mem_rewind(rmark)

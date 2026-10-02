@@ -204,15 +204,22 @@ fn boila_pg_serve_p(fd: i64, pack: i64, srv: BoilaServer) -> BoilaPgOut !IO !Net
         // MEM-4: rewind на заявката — само при затворена txn; mark-ът
         // (и have_mark) оцелява през отворена транзакция до COMMIT/ROLLBACK.
         if have_mark && sp.txn.active == 0 {
+            let oldb = rr.buf
             mem_persist_begin()
             let mut nb = pempty
-            if rr.pos < bytes_len(rr.buf) {
-                nb = bytes_slice(rr.buf, rr.pos, bytes_len(rr.buf))
+            if rr.pos < bytes_len(oldb) {
+                nb = bytes_slice(oldb, rr.pos, bytes_len(oldb))
             }
             mem_persist_end()
             // TLS: ключовете на tconn са от старта (преди mark-а) — оцеляват
             // rewind; новият reader запазва транспортните полета.
             rr = PgWReader { fd: fd, buf: nb, pos: 0, tls: rr.tls, tconn: rr.tconn, scratch: rr.scratch }
+            // MEM-8: persist leftover от миналия ход не се чисти от rewind.
+            if rc_on() == 0 {
+                if bytes_len(oldb) > 0 {
+                    drop(oldb)
+                }
+            }
             sp.txn = idle_txn
             mem_rewind(rmark)
             have_mark = false

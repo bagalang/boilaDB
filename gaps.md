@@ -5,6 +5,25 @@ V = value/codec/vector, K = key/scan, S = storage, M = metrics/monitoring,
 H = HTTP/API, Q = SQL (от P1), C = cache/planner, A = агрегати,
 T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
 
+## MEM-8 — mux park box (opened 2026-10-02)
+
+- **MEM-8 — (FIXED) `map_del` на struct не пускаше box-а, а PG mux
+  take+park го правеше на всеки ход.** `baga_map_del_*` махаше entry-то
+  и пускаше shell-а, но `pv` (копието на структурата) оставаше.
+  `boila_pg_mux_take` викаше `map_del`, следващият `boila_pg_mux_park`
+  правеше нов `map_set` → нов malloc на целия `BoilaPgLive`. `mem_rewind`
+  не пипа persist. При `BOILA_WORKERS>0` това е по един box на заявка
+  (сесията с празните AST-та) и RSS пълни тавана за часове. Сега:
+  (1) non-rc `map_del` на struct/enum пуска `pv`; (2) mux take не трие
+  fd-то — `map_set` презаписва същия box; (3) затворена връзка минава
+  през `forget`, който пуска box-а, плюс drop на reader буфера и на
+  stmts/portals/guc; (4) същият drop на leftover буфера в per-conn
+  цикъла и в HTTP mux. Gate: `tests/persist_mapdel_test.baga`.
+- **Остатък:** 8 KB reader scratch е `str` и рантаймът не го пуска при
+  disconnect. Празните AST vec-ове на сесията също живеят до края на
+  процеса. Вдигане на 2 GB капа само отлага убийството, ако нещо друго
+  продължи да заделя persist без `drop`.
+
 ## MEM-7 — persist malloc (opened 2026-10-01)
 
 - **MEM-7 — (FIXED) cross-thread persist drop не връщаше паметта.**

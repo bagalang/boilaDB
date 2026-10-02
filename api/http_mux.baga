@@ -40,8 +40,8 @@ fn boila_http_mux_take(mux: i64, fd: i64) -> BoilaHttpLive !Par {
     mutex_lock(mu)
     let m: Map<i64, BoilaHttpLive> = h_map(cell2_1(mux))
     if map_has(m, fd) == 1 {
+        // MEM-8: същата идиома като PG mux — map_set презаписва box-а.
         let live = map_get(m, fd)
-        map_del(m, fd)
         mutex_unlock(mu)
         return live
     }
@@ -68,13 +68,38 @@ fn boila_http_mux_close(fd: i64, live: BoilaHttpLive) -> i64 !IO !Par {
     return 0
 }
 
+fn boila_http_mux_forget(mux: i64, fd: i64) -> i64 !Par {
+    let mu = cell2_0(mux)
+    mutex_lock(mu)
+    let m: Map<i64, BoilaHttpLive> = h_map(cell2_1(mux))
+    if map_has(m, fd) == 1 {
+        map_del(m, fd)
+    }
+    mutex_unlock(mu)
+    return 0
+}
+
+fn boila_http_mux_release(live: BoilaHttpLive) {
+    if rc_on() == 1 {
+        return
+    }
+    let b = live.r.buf
+    if bytes_len(b) > 0 {
+        drop(b)
+    }
+    let g = live.guc
+    drop(g)
+}
+
 // P33b: park с persist преизграждане (PG mux идиомата) + per-turn rewind —
 // без него worker arena-та расте безгранично при sustained keep-alive load.
 fn boila_http_mux_park(mux: i64, fd: i64, live: BoilaHttpLive, pempty: bytes) -> i64 !Par {
+    let old = live.r.buf
+    let oldg = live.guc
     mem_persist_begin()
     let mut nb = pempty
-    if live.r.pos < bytes_len(live.r.buf) {
-        nb = bytes_slice(live.r.buf, live.r.pos, bytes_len(live.r.buf))
+    if live.r.pos < bytes_len(old) {
+        nb = bytes_slice(old, live.r.pos, bytes_len(old))
     }
     let pguc: Map<str, str> = map_new()
     let ks = map_keys(live.guc)
@@ -96,6 +121,12 @@ fn boila_http_mux_park(mux: i64, fd: i64, live: BoilaHttpLive, pempty: bytes) ->
     }
     let r = boila_http_mux_put(mux, fd, pl)?
     mem_persist_end()
+    if rc_on() == 0 {
+        if bytes_len(old) > 0 {
+            drop(old)
+        }
+        drop(oldg)
+    }
     return r
 }
 
@@ -151,6 +182,8 @@ fn boila_http_mux_turn(pack: i64, mux: i64, fd: i64, pempty: bytes) -> i64 !IO !
         }
     }
     if live.alive == 0 - 2 {
+        boila_http_mux_forget(mux, fd)?
+        boila_http_mux_release(live)
         boila_http_mux_close(fd, live)?
         if have_mark && live.txn.active == 0 {
             mem_rewind(rmark)

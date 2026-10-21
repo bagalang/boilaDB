@@ -230,6 +230,9 @@ fn boila_pg_mux_turn(pack: i64, mux: i64, fd: i64, pempty: bytes) -> i64 !IO !Ne
         let it = boila_txn_new()
         mem_persist_end()
         // live.rr идва от take (с persist scratch) — не се пресъздава.
+        // Junk-ът на default-а от take (buf/stmts/portals/guc) се пуска тук —
+        // иначе по няколко malloc кутии на връзка (MEM-8/P33b остатъка).
+        boila_pg_mux_release(live)
         live = BoilaPgLive { rr: live.rr, sess: sp, started: 0, in_err: 0, itxn: it }
         live.sess.fd = fd
         live.sess.txn = live.itxn

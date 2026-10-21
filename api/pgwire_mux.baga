@@ -110,8 +110,9 @@ fn boila_pg_mux_release(live: BoilaPgLive) {
 //  - на park live state-ът се преизгражда в persist (reader leftover,
 //    sess обвивка, map node); съдържанието на stmts/portals/guc вече е
 //    persist по MEM-4 местата си;
-//  - rewind се прави само при затворена txn и без TLS (tconn ключовете са
-//    дълбока структура от startup turn-а — не се преизгражда).
+//  - mark-ът се взема СЛЕД startup хода (tconn ключовете са под него и
+//    оцеляват rewind — за TLS също), само при затворена txn; rewind — в
+//    края на хода пак при затворена txn.
 
 // Persist сесия след startup: st.sess идва от turn arena с прясни maps —
 // заменяме с persist maps + копия на guc/db (stmts/portals са празни тук).
@@ -233,14 +234,6 @@ fn boila_pg_mux_turn(pack: i64, mux: i64, fd: i64, pempty: bytes) -> i64 !IO !Ne
         live.sess.fd = fd
         live.sess.txn = live.itxn
     }
-    // P33b: mark само при затворена txn; rewind — пак при затворена txn и
-    // без TLS (txn може да се отвори в средата на batch → проверка пак накрая).
-    let mut rmark: i64 = 0
-    let mut have_mark = false
-    if live.sess.txn.active == 0 {
-        rmark = mem_mark()
-        have_mark = true
-    }
     if live.started == 0 {
         let st = pgw_serve_startup(fd, pack, boila_mt_seed_srv())?
         if st.ok == 0 || st.done == 0 {
@@ -251,34 +244,56 @@ fn boila_pg_mux_turn(pack: i64, mux: i64, fd: i64, pempty: bytes) -> i64 !IO !Ne
         live.started = 1
         live.rr = st.rr
         live.sess = boila_pg_mux_psess(st.sess, live.itxn)
+        // Mark чак СЛЕД startup: tconn ключовете (и всичко от ръкостискането,
+        // вкл. PEM parse-а) са ПОД mark-а и оцеляват rewind — както в per-conn
+        // цикъла на pgwire_serve.baga. Преди mark-ът се вземаше преди startup
+        // и rewind-ът беше забранен за TLS (`tls == 0`) → arena-та растеше
+        // ~60 KB/заявка безгранично → OOM SIGKILL при sustained load.
+        let mut rmark: i64 = 0
+        let mut have_mark = false
+        if live.sess.txn.active == 0 {
+            rmark = mem_mark()
+            have_mark = true
+        }
         live = boila_pg_mux_drain(pack, live, 0)?
         if live.started == 0 - 2 {
             boila_pg_mux_forget(mux, fd)?
             boila_pg_mux_release(live)
             boila_pg_mux_close(fd, live.sess)?
-            if have_mark && live.sess.txn.active == 0 && live.sess.tls == 0 {
+            if have_mark {
                 mem_rewind(rmark)
             }
             return 0
         }
         boila_pg_mux_park(mux, fd, live, pempty)?
-        if have_mark && live.sess.txn.active == 0 && live.sess.tls == 0 {
+        if have_mark && live.sess.txn.active == 0 {
             mem_rewind(rmark)
         }
         return 1
+    }
+    // P33b: mark само при затворена txn; rewind — пак при затворена txn
+    // (txn може да се отвори в средата на batch → проверка пак накрая).
+    // Mark-ът е turn-local и винаги последният за нишката (един ход = един
+    // worker) — LIFO редът на mem_rewind се пази; затова не се паркира
+    // през ходове: следващият ход може да е на друг worker.
+    let mut rmark: i64 = 0
+    let mut have_mark = false
+    if live.sess.txn.active == 0 {
+        rmark = mem_mark()
+        have_mark = true
     }
     live = boila_pg_mux_drain(pack, live, 1)?
     if live.started == 0 - 2 {
         boila_pg_mux_forget(mux, fd)?
         boila_pg_mux_release(live)
         boila_pg_mux_close(fd, live.sess)?
-        if have_mark && live.sess.txn.active == 0 && live.sess.tls == 0 {
+        if have_mark {
             mem_rewind(rmark)
         }
         return 0
     }
     boila_pg_mux_park(mux, fd, live, pempty)?
-    if have_mark && live.sess.txn.active == 0 && live.sess.tls == 0 {
+    if have_mark && live.sess.txn.active == 0 {
         mem_rewind(rmark)
     }
     return 1

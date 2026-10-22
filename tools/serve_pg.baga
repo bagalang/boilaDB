@@ -3,7 +3,7 @@
 
 import "../api/pgwire.baga"
 import "../api/pgwire_serve.baga"
-import "../api/pgwire_mux.baga"
+import "../api/pgwire_mux_run.baga"
 import "../api/serve_mt.baga"
 import "../api/serve_mt_pool.baga"
 import "../api/serve_stats.baga"

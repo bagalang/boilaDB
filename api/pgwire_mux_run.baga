@@ -1,0 +1,108 @@
+// pgwire_mux_run.baga — worker-и и dispatch loop за PG mux-а.
+// Per-turn state machine-ът (take/park/turn) е в pgwire_mux.baga.
+
+import "pgwire_mux.baga"
+import "serve_mt.baga"
+import "serve_mux.baga"
+import "std/net/tcp.baga"
+import "std/net/poll.baga"
+
+fn boila_pg_mux_worker(ctx: i64) -> i64 !IO !Net !Time !Par {
+    let work = cell2_0(ctx)
+    let rest = cell2_1(ctx)
+    let idle = cell2_0(rest)
+    let rest2 = cell2_1(rest)
+    let pack = cell2_0(rest2)
+    let rest3 = cell2_1(rest2)
+    let mux = cell2_0(rest3)
+    let wfd = cell2_1(rest3)
+    let mut running: i64 = 1
+    mem_persist_begin()
+    let pempty = bytes_new(0)
+    mem_persist_end()
+    while running == 1 {
+        let p = chan_recv2(work)
+        if cell2_0(p) == 0 {
+            running = 0
+        } else {
+            let fd = cell2_1(p)
+            if fd < 0 {
+                running = 0
+            } else {
+                let open = boila_pg_mux_turn(pack, mux, fd, pempty) catch !IO => 0 catch !Net => 0 catch !Time => 0 catch !Random => 0
+                if open == 1 {
+                    chan_send(idle, fd)
+                    boila_mux_wake(wfd)?
+                } else {
+                    boila_mt_end_conn(pack)?
+                }
+            }
+        }
+    }
+    return 0
+}
+
+fn boila_pg_mux_run(listener: i64, pack: i64, workers: i64) -> i64 !IO !Net !Time !Par !Random {
+    let mux = boila_pg_mux_new()?
+    let pipe = boila_mux_pipe2()?
+    let rfd = cell2_0(pipe)
+    let wfd = cell2_1(pipe)
+    if rfd < 0 {
+        return 1
+    }
+    let work = chan_new(64)
+    let idlech = chan_new(64)
+    let wctx = cell2(work, cell2(idlech, cell2(pack, cell2(mux, wfd))))
+    let mut i: i64 = 0
+    while i < workers {
+        go_bg(boila_pg_mux_worker, wctx)
+        i = i + 1
+    }
+    let mut idle: Vec<i64> = vec_new()
+    let mut going: i64 = 1
+    while going == 1 {
+        idle = boila_mux_idle_pull(idlech, idle)?
+        let set: Vec<i64> = vec_new()
+        vec_push(set, listener)
+        vec_push(set, rfd)
+        let mut j: i64 = 0
+        while j < vec_len(idle) {
+            vec_push(set, vec_get(idle, j))
+            j = j + 1
+        }
+        let pr = poll_wait(set, 200)?
+        if pr.ok < 0 {
+            going = 0
+        } else {
+            idle = boila_mux_idle_pull(idlech, idle)?
+            if poll_has(pr.ready, rfd) == 1 {
+                let _b = tcp_read(rfd, 64)?
+            }
+            let mut k: i64 = 0
+            while k < vec_len(pr.ready) {
+                let fd = vec_get(pr.ready, k)
+                if fd != listener && fd != rfd {
+                    if boila_mux_vec_has(idle, fd) == 1 {
+                        idle = boila_mux_vec_drop(idle, fd)
+                        chan_send(work, fd)
+                    }
+                }
+                k = k + 1
+            }
+            if poll_has(pr.ready, listener) == 1 {
+                let fd = tcp_accept(listener)?
+                if fd >= 0 {
+                    tcp_set_nodelay(fd)?
+                    if boila_mt_try_conn(pack)? == 0 {
+                        tcp_close(fd)?
+                    } else {
+                        if boila_mux_vec_has(idle, fd) == 0 {
+                            vec_push(idle, fd)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return 1
+}

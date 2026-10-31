@@ -342,9 +342,6 @@ fn boila_sel_free(x: BoilaSel) {
     let l = x.fts_gaps; drop(l)
     let m = x.in_vals; drop(m)
     let n = x.xw_toks; drop(n)
-    let z1 = x.pk_eq.b; drop(z1)
-    let z2 = x.pk_lo.b; drop(z2)
-    let z3 = x.pk_hi.b; drop(z3)
 }
 
 fn boila_ins_free(x: BoilaIns) {
@@ -362,17 +359,11 @@ fn boila_upd_free(x: BoilaUpd) {
     let c = x.set_xtoks; drop(c)
     let d = x.xw_toks; drop(d)
     let e = x.ret_cols; drop(e)
-    let z1 = x.pk_eq.b; drop(z1)
-    let z2 = x.pk_lo.b; drop(z2)
-    let z3 = x.pk_hi.b; drop(z3)
 }
 
 fn boila_del_free(x: BoilaDel) {
     let a = x.xw_toks; drop(a)
     let b = x.ret_cols; drop(b)
-    let z1 = x.pk_eq.b; drop(z1)
-    let z2 = x.pk_lo.b; drop(z2)
-    let z3 = x.pk_hi.b; drop(z3)
 }
 
 // UPDATE/DELETE: WHERE е pk-only или по индексирана колона (P3),

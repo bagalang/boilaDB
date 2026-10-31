@@ -37,8 +37,11 @@ fn boila_port_parse(raw: str, def: i64) -> i64 {
 }
 
 fn boila_http_conn(ctx: i64) -> i64 !IO !Net !Time !Par {
+    // P51: connection-lifetime mark (startup преди първия turn mark).
+    let conn_mark = mem_mark()
     let fd = cell2_0(ctx)
     let pack = cell2_1(ctx)
+    cell2_free(ctx)
     tcp_set_nodelay(fd)?
     let mut txn = boila_txn_new()
     let mut sess_db = "boila"
@@ -101,6 +104,7 @@ fn boila_http_conn(ctx: i64) -> i64 !IO !Net !Time !Par {
     }
     tcp_close(fd)?
     boila_mt_end_conn(pack)?
+    mem_rewind(conn_mark)
     return 0
 }
 

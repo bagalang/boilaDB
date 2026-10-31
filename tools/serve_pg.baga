@@ -35,8 +35,12 @@ fn boila_port_parse(raw: str, def: i64) -> i64 {
 }
 
 fn boila_pg_conn_mt(ctx: i64) -> i64 !IO !Net !Time !Par !Random {
+    // P51: connection-lifetime mark — startup/allocations под него се
+    // освобождават при close (иначе ~115 KB/кратка връзка при -C).
+    let conn_mark = mem_mark()
     let fd = cell2_0(ctx)
     let pack = cell2_1(ctx)
+    cell2_free(ctx)
     let names: Vec<str> = vec_new()
     let stores: Vec<BoilaStore> = vec_new()
     let seed = BoilaServer {
@@ -46,6 +50,7 @@ fn boila_pg_conn_mt(ctx: i64) -> i64 !IO !Net !Time !Par !Random {
     }
     let ro = boila_pg_serve_p(fd, pack, seed)?
     boila_mt_end_conn(pack)?
+    mem_rewind(conn_mark)
     return 0
 }
 

@@ -318,8 +318,9 @@ cell2 пакети (доказаният модел на rocksbaga MT и queueba
   `mem_mark`/`mem_rewind`; mux startup-ът за non-TLS се rewind-ва след
   `psess`, а default reader-ът вече не алокира 8KB scratch. `pgbench -C`
   ръстът падна ~184→164 KB/връзка, но още не е нула — остава
-  per-connection persist/arena (e_sel/e_ins/e_upd/e_del, scratch), за
-  който трябва pinned worker или per-connection persist arena.
+  per-connection persist/arena. P53 освобождава e_* плановете при close,
+  но scratch/allocator остават; трябва pinned worker или per-connection
+  persist арена.
 - **Mux loop rewind + cell2 ownership (P48/P49):** main mux loop-ът прави
   `mem_mark`/`mem_rewind` на итерация с фиксиран idle Vec (без per-turn
   Map/persist растеж); `chan_recv2`/`chan_try_recv` cell2-овете се

@@ -98,6 +98,11 @@ fn boila_pg_mux_release(live: BoilaPgLive) {
     drop(pm)
     let gu = live.sess.guc
     drop(gu)
+    // P53: e_* empty планове са persist в psess; без това текат на връзка.
+    boila_sel_free(live.sess.e_sel)
+    boila_ins_free(live.sess.e_ins)
+    boila_upd_free(live.sess.e_upd)
+    boila_del_free(live.sess.e_del)
 }
 
 // P33b: per-turn rewind в mux (същата MEM-4 идиома като per-conn цикъла в

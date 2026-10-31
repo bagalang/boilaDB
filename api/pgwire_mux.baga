@@ -131,6 +131,12 @@ fn boila_pg_mux_release(live: BoilaPgLive) {
     boila_ins_free(live.sess.e_ins)
     boila_upd_free(live.sess.e_upd)
     boila_del_free(live.sess.e_del)
+    // P61b: idle txn е per-connection persist; sc/stmts reference shared
+    // store/pc — не се пипат.
+    let tw = live.itxn.writes
+    drop(tw)
+    let tr = live.itxn.reads
+    drop(tr)
 }
 
 // P33b: per-turn rewind в mux (същата MEM-4 идиома като per-conn цикъла в
@@ -274,6 +280,9 @@ fn boila_pg_mux_turn(pack: i64, mux: i64, fd: i64, pempty: bytes) -> i64 !IO !Ne
         live = BoilaPgLive { rr: live.rr, sess: sp, started: 0, in_err: 0, itxn: it }
         live.sess.fd = fd
         live.sess.txn = live.itxn
+        // P54 fix: за НОВА връзка default allocations от take са над
+        // външния pre mark; досега се rewind-ваше само за existing.
+        mem_rewind(pre)
     }
     if live.started == 0 {
         // P52: startup-ът е connection-scoped. За non-TLS вдигаме mark

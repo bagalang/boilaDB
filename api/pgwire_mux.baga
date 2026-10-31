@@ -10,6 +10,7 @@ import "serve_mt.baga"
 import "../server/databases.baga"
 import "../txn/mvcc.baga"
 import "../sql/ast.baga"
+import "../sql/ast_free.baga"
 import "std/net/tcp.baga"
 import "std/bytes/bytes.baga"
 import "std/str/str.baga"
@@ -98,6 +99,9 @@ fn boila_pg_mux_close(fd: i64, sess: BoilaPgSess) -> i64 !IO !Par {
 }
 
 // Маха fd от mux картата. С MEM-8 map_del пуска и box-а на live.
+// Scratch entry-то НЕ се трие: при преизползван fd (Linux reuse-ва ниски
+// номера) новата връзка получава същия 8 KB буфер без нов persist malloc.
+// Map-ът е ограничен от ulimit -n (макс. едновременни fd), не от брой връзки.
 fn boila_pg_mux_forget(mux: i64, fd: i64) -> i64 !Par {
     let mu = cell2_0(mux)
     mutex_lock(mu)

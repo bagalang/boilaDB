@@ -19,10 +19,13 @@ T = транзакции, W = wire protocol, F = FTS, U = app-ready (P20).
   през `forget`, който пуска box-а, плюс drop на reader буфера и на
   stmts/portals/guc; (4) същият drop на leftover буфера в per-conn
   цикъла и в HTTP mux. Gate: `tests/persist_mapdel_test.baga`.
-- **Остатък:** 8 KB reader scratch е `str` и рантаймът не го пуска при
-  disconnect. Празните AST vec-ове на сесията също живеят до края на
-  процеса. Вдигане на 2 GB капа само отлага убийството, ако нещо друго
-  продължи да заделя persist без `drop`.
+- **Остатък (анализиран 2026-10-31, bounded):** 8 KB reader scratch е `str`
+  и рантаймът не го пуска при disconnect (str е arena-bound по дизайн).
+  Но scratch map-ът е keyed по fd и Linux преизползва fd номера — реалният
+  брой entries е ограничен от `ulimit -n`, не от брой връзки (макс. ~8 MB
+  при 1024 fd). Празните AST vec-ове (e_sel/e_ins/e_upd/e_del) се drop-ват
+  в `boila_pg_mux_release` при forget. Leftover reader buf се drop-ва в
+  `boila_pg_mux_park`. Няма неограничен leak от disconnect пътя.
 
 ## MEM-7 — persist malloc (opened 2026-10-01)
 

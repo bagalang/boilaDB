@@ -325,46 +325,7 @@ fn boila_ins_empty() -> BoilaIns {
     return BoilaIns { table: "", cols: cols, rows: rows, oc: 0, oc_cols: oc_cols, oc_vals: oc_vals, oc_xtoks: oc_xtoks, has_ret: 0, ret_star: 0, ret_cols: ret_cols }
 }
 
-// P53: освобождаване на session-ските empty plan вектори (persist при mux
-// close). drop() пуска outer Vec data; за празни планове това е основното.
-fn boila_sel_free(x: BoilaSel) {
-    let a = x.items; drop(a)
-    let b = x.ord_cols; drop(b)
-    let c = x.ord_desc; drop(c)
-    let d = x.group_cols; drop(d)
-    let e = x.group_xtoks; drop(e)
-    let f = x.hav_preds; drop(f)
-    let g = x.hav_nodes; drop(g)
-    let h = x.join_lcols; drop(h)
-    let i = x.join_rcols; drop(i)
-    let j = x.joins; drop(j)
-    let k = x.fts_terms; drop(k)
-    let l = x.fts_gaps; drop(l)
-    let m = x.in_vals; drop(m)
-    let n = x.xw_toks; drop(n)
-}
-
-fn boila_ins_free(x: BoilaIns) {
-    let a = x.cols; drop(a)
-    let b = x.rows; drop(b)
-    let c = x.oc_cols; drop(c)
-    let d = x.oc_vals; drop(d)
-    let e = x.oc_xtoks; drop(e)
-    let f = x.ret_cols; drop(f)
-}
-
-fn boila_upd_free(x: BoilaUpd) {
-    let a = x.set_cols; drop(a)
-    let b = x.set_vals; drop(b)
-    let c = x.set_xtoks; drop(c)
-    let d = x.xw_toks; drop(d)
-    let e = x.ret_cols; drop(e)
-}
-
-fn boila_del_free(x: BoilaDel) {
-    let a = x.xw_toks; drop(a)
-    let b = x.ret_cols; drop(b)
-}
+// P53 free функции (boila_sel_free/ins_free/upd_free/del_free) → ast_free.baga
 
 // UPDATE/DELETE: WHERE е pk-only или по индексирана колона (P3),
 // същите has_eq/lo/hi полета като BoilaSel.

@@ -226,7 +226,14 @@ fn boila_pg_mux_drain(pack: i64, live0: BoilaPgLive, block: i64) -> BoilaPgLive 
 }
 
 fn boila_pg_mux_turn(pack: i64, mux: i64, fd: i64, pempty: bytes) -> i64 !IO !Net !Time !Par !Random {
+    // P54: mark ПРЕДИ take — default сесията/плановете от take са arena
+    // и иначе остават под startup mark-а. За съществуваща връзка веднага
+    // връщаме mark-а (take само чете persist box).
+    let pre = mem_mark()
     let mut live = boila_pg_mux_take(mux, fd)?
+    if live.started >= 0 {
+        mem_rewind(pre)
+    }
     if live.started < 0 {
         mem_persist_begin()
         let sp = boila_pg_sess_new("boila")

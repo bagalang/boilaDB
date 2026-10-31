@@ -53,7 +53,66 @@ fn boila_mux_wake(wfd: i64) -> i64 !Net !IO {
     // P47: wfd е pipe2, не socket. tcp_write ползва sendto → ENOTSOCK и
     // catch-ът го гълташе, значи worker wake-ът никога не стигаше до
     // poll-а; всяка заявка чакаше целия 200 ms timeout (5 tps на връзка).
-    let _w = fd_write(wfd, "w") catch !IO => 0
+    // P49: raw write с литерал — fd_write/substr алокираше малък низ на
+    // ВСЕКИ turn извън turn-ския rewind (worker loop-ът не rewind-ва).
+    let _w = write(wfd, "w", 1) catch !IO => 0
+    return 0
+}
+
+// P48: idle fd-овете се пазят във ФИКСИРАН Vec с -1 за свободен слот.
+// Създава се преди main loop-а, vec_set не реалокира, значи mem_rewind на
+// итерацията не може да го реклеймне; няма Map/persist растеж per turn.
+fn boila_mux_idle_init(cap: i64) -> Vec<i64> {
+    let v: Vec<i64> = vec_new()
+    let mut i: i64 = 0
+    while i < cap {
+        vec_push(v, 0 - 1)
+        i = i + 1
+    }
+    return v
+}
+
+fn boila_mux_idle_add(idle: Vec<i64>, fd: i64) -> i64 {
+    let mut i: i64 = 0
+    while i < vec_len(idle) {
+        let cur = vec_get(idle, i)
+        if cur == fd {
+            return 0
+        }
+        if cur < 0 {
+            vec_set(idle, i, fd)
+            return 0
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+fn boila_mux_idle_del(idle: Vec<i64>, fd: i64) -> i64 {
+    let mut i: i64 = 0
+    while i < vec_len(idle) {
+        if vec_get(idle, i) == fd {
+            vec_set(idle, i, 0 - 1)
+            return 0
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+fn boila_mux_idle_fill(idlech: i64, idle: Vec<i64>) -> i64 !Par {
+    let mut more: i64 = 1
+    while more == 1 {
+        let t = chan_try_recv(idlech)
+        let ok = cell2_0(t)
+        let fd = cell2_1(t)
+        cell2_free(t)
+        if ok == 1 {
+            boila_mux_idle_add(idle, fd)
+        } else {
+            more = 0
+        }
+    }
     return 0
 }
 
@@ -62,8 +121,10 @@ fn boila_mux_idle_pull(idle: i64, fds: Vec<i64>) -> Vec<i64> !Par {
     let mut more: i64 = 1
     while more == 1 {
         let t = chan_try_recv(idle)
-        if cell2_0(t) == 1 {
-            let fd = cell2_1(t)
+        let ok = cell2_0(t)
+        let fd = cell2_1(t)
+        cell2_free(t)
+        if ok == 1 {
             if boila_mux_vec_has(out, fd) == 0 {
                 vec_push(out, fd)
             }

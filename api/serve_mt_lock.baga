@@ -85,7 +85,8 @@ fn boila_mt_rw_epoch(rw: Map<i64, i64>) -> i64 {
 }
 
 // Data lock по кеширано st (само per-db mu, без gmu) + epoch под същия mu.
-// Връща cell2(mu_вид_няма_значение, epoch) — epoch-ът е на индекс 1.
+// P49: връща epoch-а ДИРЕКТНО (по-рано cell2(0, epoch) се губеше на всяка
+// заявка → ~35 B/заявка malloc leak в горещия път).
 fn boila_mt_data_lock_st_epoch(st: i64) -> i64 !Time !Par {
     let mu = cell2_0(st)
     let rw: Map<i64, i64> = h_map(cell2_1(st))
@@ -103,7 +104,7 @@ fn boila_mt_data_lock_st_epoch(st: i64) -> i64 !Time !Par {
             sleep_ms(1)
         }
     }
-    return cell2(0, epo)
+    return epo
 }
 
 // Epoch bump. gmu_held=1 → caller вече държи gmu (cold checkout/eviction);

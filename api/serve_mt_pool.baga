@@ -41,10 +41,12 @@ fn boila_pool_worker(ctx: i64) -> i64 !IO !Net !Time !Par {
     let mut running: i64 = 1
     while running == 1 {
         let p = chan_recv2(ch)
-        if cell2_0(p) == 0 {
+        let ok = cell2_0(p)
+        let fd = cell2_1(p)
+        cell2_free(p)
+        if ok == 0 {
             running = 0
         } else {
-            let fd = cell2_1(p)
             if fd < 0 {
                 running = 0
             } else {

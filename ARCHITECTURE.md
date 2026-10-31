@@ -310,6 +310,12 @@ cell2 пакети (доказаният модел на rocksbaga MT и queueba
   `pipe2`; `tcp_write`/`sendto` даваше `ENOTSOCK`, wake-ът се губеше и
   всяка заявка чакаше 200 ms poll timeout (5 tps/връзка). След fix-а
   point SELECT стига ~151k tps @ c=16 на 12-thread машина.
+- **Mux loop rewind + cell2 ownership (P48/P49):** main mux loop-ът прави
+  `mem_mark`/`mem_rewind` на итерация с фиксиран idle Vec (без per-turn
+  Map/persist растеж); `chan_recv2`/`chan_try_recv` cell2-овете се
+  освобождават с `cell2_free`; epoch-ът се връща директно, без cell2 на
+  заявка; wake-ът пише с raw `write`. RSS за 20 s @160k tps падна от
+  1.9 GB на ~8 MB.
 - **Commit sequencer:** издава LSN-и за multi-shard commit-и; едно-shard
   commit-и (масовият случай) не го чакат.
 - **MVCC четене:** worker-ите четат без ключалки върху snapshot LSN;

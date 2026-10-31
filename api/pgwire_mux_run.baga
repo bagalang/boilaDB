@@ -22,10 +22,12 @@ fn boila_pg_mux_worker(ctx: i64) -> i64 !IO !Net !Time !Par {
     mem_persist_end()
     while running == 1 {
         let p = chan_recv2(work)
-        if cell2_0(p) == 0 {
+        let ok = cell2_0(p)
+        let fd = cell2_1(p)
+        cell2_free(p)
+        if ok == 0 {
             running = 0
         } else {
-            let fd = cell2_1(p)
             if fd < 0 {
                 running = 0
             } else {
@@ -58,23 +60,29 @@ fn boila_pg_mux_run(listener: i64, pack: i64, workers: i64) -> i64 !IO !Net !Tim
         go_bg(boila_pg_mux_worker, wctx)
         i = i + 1
     }
-    let mut idle: Vec<i64> = vec_new()
+    // P48: фиксиран Vec с idle слотове, създаден преди loop-а; vec_set
+    // не реалокира, значи rewind-ът на итерацията не го пипа.
+    let idle = boila_mux_idle_init(boila_mt_max_conn(pack)? + 64)
     let mut going: i64 = 1
     while going == 1 {
-        idle = boila_mux_idle_pull(idlech, idle)?
+        let rmark = mem_mark()
+        boila_mux_idle_fill(idlech, idle)?
         let set: Vec<i64> = vec_new()
         vec_push(set, listener)
         vec_push(set, rfd)
         let mut j: i64 = 0
         while j < vec_len(idle) {
-            vec_push(set, vec_get(idle, j))
+            let fd = vec_get(idle, j)
+            if fd >= 0 {
+                vec_push(set, fd)
+            }
             j = j + 1
         }
         let pr = poll_wait(set, 200)?
         if pr.ok < 0 {
             going = 0
         } else {
-            idle = boila_mux_idle_pull(idlech, idle)?
+            boila_mux_idle_fill(idlech, idle)?
             if poll_has(pr.ready, rfd) == 1 {
                 let _b = tcp_read(rfd, 64)?
             }
@@ -83,7 +91,7 @@ fn boila_pg_mux_run(listener: i64, pack: i64, workers: i64) -> i64 !IO !Net !Tim
                 let fd = vec_get(pr.ready, k)
                 if fd != listener && fd != rfd {
                     if boila_mux_vec_has(idle, fd) == 1 {
-                        idle = boila_mux_vec_drop(idle, fd)
+                        boila_mux_idle_del(idle, fd)
                         chan_send(work, fd)
                     }
                 }
@@ -96,13 +104,12 @@ fn boila_pg_mux_run(listener: i64, pack: i64, workers: i64) -> i64 !IO !Net !Tim
                     if boila_mt_try_conn(pack)? == 0 {
                         tcp_close(fd)?
                     } else {
-                        if boila_mux_vec_has(idle, fd) == 0 {
-                            vec_push(idle, fd)
-                        }
+                        boila_mux_idle_add(idle, fd)
                     }
                 }
             }
         }
+        mem_rewind(rmark)
     }
     return 1
 }

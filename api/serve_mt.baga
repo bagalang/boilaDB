@@ -243,8 +243,8 @@ fn boila_mt_exec_guc_sc(pack: i64, txn: BoilaTxn, db: str, sql: str, guc: Map<st
         return BoilaMtScOut { out: out, sc: sc }
     }
     if sc.cdb == db && sc.cst != 0 {
-        let le = boila_mt_data_lock_st_epoch(sc.cst)?
-        if cell2_1(le) == sc.cepo {
+        let epo = boila_mt_data_lock_st_epoch(sc.cst)?
+        if epo == sc.cepo {
             let out = boila_exec_sql_mu(sc.cstore, txn, db, sql, sc.cpc, boila_mt_pc_mu(sc.cst), guc)?
             boila_mt_checkin_data(pack, db, out.s)
             boila_mt_data_unlock_st(sc.cst)?

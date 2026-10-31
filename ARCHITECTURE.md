@@ -310,6 +310,10 @@ cell2 пакети (доказаният модел на rocksbaga MT и queueba
   `pipe2`; `tcp_write`/`sendto` даваше `ENOTSOCK`, wake-ът се губеше и
   всяка заявка чакаше 200 ms poll timeout (5 tps/връзка). След fix-а
   point SELECT стига ~151k tps @ c=16 на 12-thread машина.
+- **HTTP mux park без per-turn persist (P50):** `BoilaHttpLive` пази
+  `db_p`/`guc_p` — park копира `db`/`guc` в persist само при разлика.
+  Преди всяка HTTP заявка правеше нов `Map<str,str>` + `substr`-ове под
+  persist; 10 s @164k rps вдигаше RSS до 328 MB, сега е ~2.7 MB.
 - **Mux loop rewind + cell2 ownership (P48/P49):** main mux loop-ът прави
   `mem_mark`/`mem_rewind` на итерация с фиксиран idle Vec (без per-turn
   Map/persist растеж); `chan_recv2`/`chan_try_recv` cell2-овете се

@@ -18,7 +18,11 @@ struct BoilaHttpLive {
     guc: Map<str, str>,
     alive: i64,
     // P33b: persist idle txn (park ресетва txn към него — PG mux идиомата)
-    itxn: BoilaTxn
+    itxn: BoilaTxn,
+    // P50: последните persist копия; park копира само при разлика, иначе
+    // всяка заявка правеше нов guc map + db substr под persist (RSS leak).
+    db_p: str,
+    guc_p: Map<str, str>
 }
 
 fn boila_http_mux_new() -> i64 !Par {
@@ -49,7 +53,8 @@ fn boila_http_mux_take(mux: i64, fd: i64) -> BoilaHttpLive !Par {
     // Default само за непознат fd (първи turn за връзката).
     return BoilaHttpLive {
         r: http_reader(fd), txn: boila_txn_new(), db: "boila",
-        guc: map_new(), alive: 0 - 1, itxn: boila_txn_new()
+        guc: map_new(), alive: 0 - 1, itxn: boila_txn_new(),
+        db_p: "boila", guc_p: map_new()
     }
 }
 
@@ -101,14 +106,24 @@ fn boila_http_mux_park(mux: i64, fd: i64, live: BoilaHttpLive, pempty: bytes) ->
     if live.r.pos < bytes_len(old) {
         nb = bytes_slice(old, live.r.pos, bytes_len(old))
     }
-    let pguc: Map<str, str> = map_new()
-    let ks = map_keys(live.guc)
-    let mut i: i64 = 0
-    while i < vec_len(ks) {
-        let k = vec_get(ks, i)
-        let v = map_get(live.guc, k)
-        map_set(pguc, substr(k, 0, len(k)), substr(v, 0, len(v)))
-        i = i + 1
+    // P50: db/guc се копират в persist само когато са различни от вече
+    // запазените. В steady state (без auth/GUC/Db switch) това е 0 alloc.
+    let mut db = live.db_p
+    if live.db != live.db_p {
+        db = substr(live.db, 0, len(live.db))
+    }
+    let mut guc = live.guc
+    if live.guc != live.guc_p {
+        let pguc: Map<str, str> = map_new()
+        let ks = map_keys(live.guc)
+        let mut i: i64 = 0
+        while i < vec_len(ks) {
+            let k = vec_get(ks, i)
+            let v = map_get(live.guc, k)
+            map_set(pguc, substr(k, 0, len(k)), substr(v, 0, len(v)))
+            i = i + 1
+        }
+        guc = pguc
     }
     let mut txn = live.itxn
     if live.txn.active == 1 {
@@ -116,8 +131,9 @@ fn boila_http_mux_park(mux: i64, fd: i64, live: BoilaHttpLive, pempty: bytes) ->
     }
     let pl = BoilaHttpLive {
         r: HttpReader { fd: fd, buf: nb, pos: 0 },
-        txn: txn, db: substr(live.db, 0, len(live.db)), guc: pguc,
-        alive: live.alive, itxn: live.itxn
+        txn: txn, db: db, guc: guc,
+        alive: live.alive, itxn: live.itxn,
+        db_p: db, guc_p: guc
     }
     let r = boila_http_mux_put(mux, fd, pl)?
     mem_persist_end()
@@ -125,7 +141,9 @@ fn boila_http_mux_park(mux: i64, fd: i64, live: BoilaHttpLive, pempty: bytes) ->
         if bytes_len(old) > 0 {
             drop(old)
         }
-        drop(oldg)
+        if live.guc != guc {
+            drop(oldg)
+        }
     }
     return r
 }
@@ -139,7 +157,8 @@ fn boila_http_mux_turn(pack: i64, mux: i64, fd: i64, pempty: bytes) -> i64 !IO !
         mem_persist_end()
         live = BoilaHttpLive {
             r: http_reader(fd), txn: it, db: "boila",
-            guc: g0, alive: 1, itxn: it
+            guc: g0, alive: 1, itxn: it,
+            db_p: "boila", guc_p: g0
         }
     }
     // P33b: mark само при затворена txn; rewind — пак при затворена txn.

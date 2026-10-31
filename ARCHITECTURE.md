@@ -294,11 +294,13 @@ cell2 пакети (доказаният модел на rocksbaga MT и queueba
   per-shard, така едноредовият INSERT е **един** fsync (не N).
   P30: `BOILA_SYNC_EVERY` / `BOILA_COMMIT_WINDOW_MS` отлагат fsync-а
   (default = всеки statement; close винаги fsync-ва).
-- **Stats извън gmu (P44/W2.15):** SQL/HTTP/PG броячите живеят в замразен
-  свят (`world_new` + `world_freeze`) и се инкрементират с атомарния
-  `wcache_add` под wlock-а на кеша. Така `boila_mt_note_sql` вече не взима
-  глобалния registry mutex по горещия път; `/metrics` чете без gmu.
-  gmu остава за registry операциите и live/max conn (там трябва check+inc).
+- **Stats и live conn извън gmu (P44/W2.15):** SQL/HTTP/PG броячите и
+  броят живи връзки живеят в замразен свят (`world_new` + `world_freeze`) и
+  се инкрементират с атомарния `wcache_add` под wlock-а на кеша. Така
+  `boila_mt_note_sql`, accept и close не взимат глобалния registry mutex;
+  `/metrics` чете без gmu. Admission е оптимистичен: при concurrent accept
+  live може momentarily да надхвърли max, губещите веднага декрементират.
+  gmu остава за registry/open-db операциите.
 - **Commit sequencer:** издава LSN-и за multi-shard commit-и; едно-shard
   commit-и (масовият случай) не го чакат.
 - **MVCC четене:** worker-ите четат без ключалки върху snapshot LSN;

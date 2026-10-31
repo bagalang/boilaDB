@@ -45,21 +45,19 @@ fn boila_mt_new(srv: BoilaServer, max_conn: i64) -> i64 !Par {
     let sm: Map<i64, BoilaServer> = map_new()
     map_set(sm, 0, srv)
     let dm: Map<str, i64> = map_new()
-    let live: Map<i64, i64> = map_new()
-    map_set(live, 0, 0)
     let mut mc = max_conn
     if mc < 1 {
         mc = 1
     }
-    map_set(live, 1, mc)
-    map_set(live, 2, 0)
-    map_set(live, 3, 0)
     let pcs: Map<str, BoilaPlanCache> = map_new()
-    // W2.15: stats живеят в замразен свят с атомарни wcache_add броячи.
-    // Така всяка заявка не взима gmu само за статистика (P44).
+    // W2.15/P44: stats И live conn живеят в замразен свят с атомарни
+    // wcache_add броячи. Така нито заявка, нито accept/close взимат gmu.
     let sw = world_new()
     world_freeze(sw)
-    return boila_mt_pack(mutex_new(), map_h(sm), map_h(dm), map_h(live), map_h(pcs), sw)
+    wcache_set(sw, boila_live_max_k(), mc)
+    wcache_set(sw, boila_live_workers_k(), 0)
+    wcache_set(sw, boila_live_mode_k(), 0)
+    return boila_mt_pack(mutex_new(), map_h(sm), map_h(dm), map_h(pcs), sw)
 }
 
 fn boila_mt_db_ok(pack: i64, db: str) -> i64 !IO !Time !Par {

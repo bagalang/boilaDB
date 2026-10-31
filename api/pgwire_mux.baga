@@ -236,15 +236,36 @@ fn boila_pg_mux_turn(pack: i64, mux: i64, fd: i64, pempty: bytes) -> i64 !IO !Ne
         live.sess.txn = live.itxn
     }
     if live.started == 0 {
+        // P52: startup-ът е connection-scoped. За non-TLS вдигаме mark
+        // ПРЕДИ него и rewind-ваме след psess; иначе startup arena-та
+        // (maps, buffers) остава под първия turn mark и тече на връзка.
+        // TLS ключовете живеят в arena ⇒ при tls==1 пазим старото поведение.
+        let pre = mem_mark()
         let st = pgw_serve_startup(fd, pack, boila_mt_seed_srv())?
         if st.ok == 0 || st.done == 0 {
+            mem_rewind(pre)
             boila_pg_mux_forget(mux, fd)?
             boila_pg_mux_release(live)
             return 0
         }
+        let st_tls = st.sess.tls
+        let mut st_rr = st.rr
+        if st_tls == 0 {
+            mem_persist_begin()
+            let mut nb = pempty
+            if st_rr.pos < bytes_len(st_rr.buf) {
+                nb = bytes_slice(st_rr.buf, st_rr.pos, bytes_len(st_rr.buf))
+            }
+            mem_persist_end()
+            st_rr = PgWReader { fd: fd, buf: nb, pos: 0, tls: 0,
+                                tconn: st_rr.tconn, scratch: st_rr.scratch }
+        }
         live.started = 1
-        live.rr = st.rr
+        live.rr = st_rr
         live.sess = boila_pg_mux_psess(st.sess, live.itxn)
+        if st_tls == 0 {
+            mem_rewind(pre)
+        }
         // Mark чак СЛЕД startup: tconn ключовете (и всичко от ръкостискането,
         // вкл. PEM parse-а) са ПОД mark-а и оцеляват rewind — както в per-conn
         // цикъла на pgwire_serve.baga. Преди mark-ът се вземаше преди startup

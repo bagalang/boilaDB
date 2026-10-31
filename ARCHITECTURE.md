@@ -314,6 +314,12 @@ cell2 пакети (доказаният модел на rocksbaga MT и queueba
   `db_p`/`guc_p` — park копира `db`/`guc` в persist само при разлика.
   Преди всяка HTTP заявка правеше нов `Map<str,str>` + `substr`-ове под
   persist; 10 s @164k rps вдигаше RSS до 328 MB, сега е ~2.7 MB.
+- **Connection churn (P51/P52):** go_bg wrappers правят connection-lifetime
+  `mem_mark`/`mem_rewind`; mux startup-ът за non-TLS се rewind-ва след
+  `psess`, а default reader-ът вече не алокира 8KB scratch. `pgbench -C`
+  ръстът падна ~184→164 KB/връзка, но още не е нула — остава
+  per-connection persist/arena (e_sel/e_ins/e_upd/e_del, scratch), за
+  който трябва pinned worker или per-connection persist arena.
 - **Mux loop rewind + cell2 ownership (P48/P49):** main mux loop-ът прави
   `mem_mark`/`mem_rewind` на итерация с фиксиран idle Vec (без per-turn
   Map/persist растеж); `chan_recv2`/`chan_try_recv` cell2-овете се

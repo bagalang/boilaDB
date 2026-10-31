@@ -26,13 +26,39 @@ struct BoilaPgLive {
 
 fn boila_pg_mux_new() -> i64 !Par {
     let m: Map<i64, BoilaPgLive> = map_new()
-    return cell2(mutex_new(), map_h(m))
+    let sm: Map<i64, str> = map_new()
+    return cell2(mutex_new(), cell2(map_h(m), map_h(sm)))
+}
+
+// P61: scratch се пази per fd в mux-а и се преизползва при нови връзки;
+// иначе всяка връзка оставя 8KB persist (pan 16KB).
+fn boila_pg_mux_scratch(mux: i64, fd: i64) -> str !Par {
+    let mu = cell2_0(mux)
+    mutex_lock(mu)
+    let sm: Map<i64, str> = h_map(cell2_1(cell2_1(mux)))
+    if map_has(sm, fd) == 1 {
+        let s = map_get(sm, fd)
+        mutex_unlock(mu)
+        return s
+    }
+    mutex_unlock(mu)
+    mem_persist_begin()
+    let s = str_repeat(" ", 8192)
+    mem_persist_end()
+    mutex_lock(mu)
+    // map entry/buckets също са persist: worker arena rewind не бива да ги
+    // реклеймва (иначе map_set върху sm корумпира map-а при churn).
+    mem_persist_begin()
+    map_set(sm, fd, s)
+    mem_persist_end()
+    mutex_unlock(mu)
+    return s
 }
 
 fn boila_pg_mux_put(mux: i64, fd: i64, live: BoilaPgLive) -> i64 !Par {
     let mu = cell2_0(mux)
     mutex_lock(mu)
-    let m: Map<i64, BoilaPgLive> = h_map(cell2_1(mux))
+    let m: Map<i64, BoilaPgLive> = h_map(cell2_0(cell2_1(mux)))
     map_set(m, fd, live)
     mutex_unlock(mu)
     return 0
@@ -41,7 +67,7 @@ fn boila_pg_mux_put(mux: i64, fd: i64, live: BoilaPgLive) -> i64 !Par {
 fn boila_pg_mux_take(mux: i64, fd: i64) -> BoilaPgLive !Par {
     let mu = cell2_0(mux)
     mutex_lock(mu)
-    let m: Map<i64, BoilaPgLive> = h_map(cell2_1(mux))
+    let m: Map<i64, BoilaPgLive> = h_map(cell2_0(cell2_1(mux)))
     if map_has(m, fd) == 1 {
         // MEM-8: не трий. map_del пускаше само entry-то, а box-ът на
         // BoilaPgLive оставаше. Следващият park правеше нов malloc.
@@ -51,10 +77,12 @@ fn boila_pg_mux_take(mux: i64, fd: i64) -> BoilaPgLive !Par {
         return live
     }
     mutex_unlock(mu)
-    // Default само за непознат fd (първи turn за връзката) — pgw_reader
-    // пуска 8 KB persist scratch, не смее да се строи на всеки take.
+    // Default само за непознат fd (първи turn). НЕ алокира 8KB scratch —
+    // startup-ът създава своя; иначе default scratch тече при замяна.
     return BoilaPgLive {
-        rr: pgw_reader(fd), sess: boila_pg_sess_new("boila"),
+        rr: PgWReader { fd: fd, buf: bytes_new(0), pos: 0, tls: 0,
+                        tconn: tls_conn_bad(""), scratch: "" },
+        sess: boila_pg_sess_new("boila"),
         started: 0 - 1, in_err: 0, itxn: boila_txn_new()
     }
 }
@@ -73,7 +101,7 @@ fn boila_pg_mux_close(fd: i64, sess: BoilaPgSess) -> i64 !IO !Par {
 fn boila_pg_mux_forget(mux: i64, fd: i64) -> i64 !Par {
     let mu = cell2_0(mux)
     mutex_lock(mu)
-    let m: Map<i64, BoilaPgLive> = h_map(cell2_1(mux))
+    let m: Map<i64, BoilaPgLive> = h_map(cell2_0(cell2_1(mux)))
     if map_has(m, fd) == 1 {
         map_del(m, fd)
     }
@@ -253,7 +281,8 @@ fn boila_pg_mux_turn(pack: i64, mux: i64, fd: i64, pempty: bytes) -> i64 !IO !Ne
         // (maps, buffers) остава под първия turn mark и тече на връзка.
         // TLS ключовете живеят в arena ⇒ при tls==1 пазим старото поведение.
         let pre = mem_mark()
-        let st = pgw_serve_startup(fd, pack, boila_mt_seed_srv())?
+        let sc = boila_pg_mux_scratch(mux, fd)?
+        let st = pgw_serve_startup(fd, pack, boila_mt_seed_srv(), sc)?
         if st.ok == 0 || st.done == 0 {
             mem_rewind(pre)
             boila_pg_mux_forget(mux, fd)?

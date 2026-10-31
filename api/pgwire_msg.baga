@@ -89,18 +89,21 @@ struct PgWReader {
     scratch: str
 }
 
+fn pgw_reader_sc(fd: i64, sc: str) -> PgWReader {
+    return PgWReader { fd: fd, buf: bytes_new(0), pos: 0, tls: 0,
+                       tconn: tls_conn_bad(""), scratch: sc }
+}
+
 fn pgw_reader(fd: i64) -> PgWReader {
     mem_persist_begin()
     let sc = str_repeat(" ", 8192)
     mem_persist_end()
-    return PgWReader { fd: fd, buf: bytes_new(0), pos: 0, tls: 0, tconn: tls_conn_bad(""), scratch: sc }
+    return pgw_reader_sc(fd, sc)
 }
 
-fn pgw_reader_tls(fd: i64, conn: TlsConn) -> PgWReader {
-    mem_persist_begin()
-    let sc = str_repeat(" ", 8192)
-    mem_persist_end()
-    return PgWReader { fd: fd, buf: bytes_new(0), pos: 0, tls: 1, tconn: conn, scratch: sc }
+fn pgw_reader_tls(fd: i64, conn: TlsConn, sc: str) -> PgWReader {
+    return PgWReader { fd: fd, buf: bytes_new(0), pos: 0, tls: 1,
+                       tconn: conn, scratch: sc }
 }
 
 struct PgWFill {

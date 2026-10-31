@@ -35,8 +35,11 @@ struct BoilaPgStart {
     err: str
 }
 
-fn pgw_serve_startup(fd: i64, pack: i64, srv: BoilaServer) -> BoilaPgStart !IO !Net !Time !Par !Random {
-    let mut rr = pgw_reader(fd)
+fn pgw_serve_startup(fd: i64, pack: i64, srv: BoilaServer, sc0: str) -> BoilaPgStart !IO !Net !Time !Par !Random {
+    let mut rr = pgw_reader_sc(fd, sc0)
+    if sc0 == "" {
+        rr = pgw_reader(fd)
+    }
     let mut srv2 = srv
     let mut db = "boila"
     let mut login_user = ""
@@ -73,7 +76,7 @@ fn pgw_serve_startup(fd: i64, pack: i64, srv: BoilaServer) -> BoilaPgStart !IO !
                     }
                     sp.tls = 1
                     sp.tconn = conn
-                    rr = pgw_reader_tls(fd, conn)
+                    rr = pgw_reader_tls(fd, conn, rr.scratch)
                     ssl_on = 1
                 }
             }
@@ -147,7 +150,7 @@ fn pgw_serve_startup(fd: i64, pack: i64, srv: BoilaServer) -> BoilaPgStart !IO !
 }
 
 fn boila_pg_serve_p(fd: i64, pack: i64, srv: BoilaServer) -> BoilaPgOut !IO !Net !Time !Par !Random {
-    let st = pgw_serve_startup(fd, pack, srv)?
+    let st = pgw_serve_startup(fd, pack, srv, "")?
     if st.ok == 0 {
         return BoilaPgOut { srv: st.srv, sess: st.sess, ok: 0, sql_err: 0, err: st.err }
     }

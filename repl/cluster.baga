@@ -42,8 +42,11 @@ fn boila_repl_leader(r: BoilaRepl) -> i64 !Par {
             chan_send(peer_ch(r.raft.peers, i), msg_role(reply))
             let rr = chan_recv_timeout(reply, 250)
             chan_close(reply)
-            if cell2_0(rr) == 1 {
-                if reply_is_ok(cell2_1(rr)) == 1 && reply_val(cell2_1(rr)) == 2 {
+            let ok = cell2_0(rr)
+            let rv = cell2_1(rr)
+            cell2_free(rr)
+            if ok == 1 {
+                if reply_is_ok(rv) == 1 && reply_val(rv) == 2 {
                     return i
                 }
             }

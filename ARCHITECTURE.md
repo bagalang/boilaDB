@@ -301,6 +301,11 @@ cell2 пакети (доказаният модел на rocksbaga MT и queueba
   `/metrics` чете без gmu. Admission е оптимистичен: при concurrent accept
   live може momentarily да надхвърли max, губещите веднага декрементират.
   gmu остава за registry/open-db операциите.
+- **Plan/catalog cache под per-db mu (P46):** `BoilaPlanCache.m/sm/tm` се
+  четат и пишат под per-db mutex (`boila_mt_pc_mu`), не под shared data
+  lock. `boila_pc_cat_mu` резолвва miss извън ключалката и вмъква под нея;
+  DDL инвалидира при exclusive lock. Така няколко SELECT worker-а не
+  правят едновременен `map_set` върху един и същ Map.
 - **Commit sequencer:** издава LSN-и за multi-shard commit-и; едно-shard
   commit-и (масовият случай) не го чакат.
 - **MVCC четене:** worker-ите четат без ключалки върху snapshot LSN;

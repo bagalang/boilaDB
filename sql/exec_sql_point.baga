@@ -73,7 +73,7 @@ struct BoilaPointHit {
     out: BoilaSqlOut
 }
 
-fn boila_try_exec_point(s: BoilaStore, txn: BoilaTxn, pc: BoilaPlanCache, lx: BoilaLex) -> BoilaPointHit !IO !Time !Par {
+fn boila_try_exec_point(s: BoilaStore, txn: BoilaTxn, pc: BoilaPlanCache, lx: BoilaLex, pc_mu: i64) -> BoilaPointHit !IO !Time !Par {
     let miss = BoilaPointHit { hit: 0, out: boila_sql_fail(s, txn, pc, "", "") }
     // t0 ("select") вече е проверен от caller-а
     let mut i: i64 = 1
@@ -118,7 +118,7 @@ fn boila_try_exec_point(s: BoilaStore, txn: BoilaTxn, pc: BoilaPlanCache, lx: Bo
     if tend.kind != tok_eof() && tend.kind != tok_semi() { return miss }
     if tend.kind == tok_semi() && boila_ps_tok(lx, i + 7).kind != tok_eof() { return miss }
     // --- изпълнение ---
-    let ct = boila_pc_cat(pc, s, txn, tt.txt)?
+    let ct = boila_pc_cat_mu(pc, s, txn, tt.txt, pc_mu)?
     let mut s2 = ct.s
     if ct.ok == 0 {
         return BoilaPointHit { hit: 1, out: boila_sql_fail(s2, txn, pc, ct.err, ct.state) }

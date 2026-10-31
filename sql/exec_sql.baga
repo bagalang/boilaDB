@@ -32,7 +32,7 @@ import "exec_sql_point.baga"
 import "exec_show.baga"
 import "std/str/str.baga"
 
-// pc_mu=0 → unlocked (tests / single-thread). Serve passes per-db mutex.
+// pc_mu=0 → unlocked (tests / single-thread). Serve passes per-db mutex (P46).
 // exec_sql.baga — SQL dispatch (P5). DML/DDL via txn buffer; bare stmts
 // auto-commit. Plan cache on single-table SELECT; DDL invalidates.
 
@@ -73,7 +73,7 @@ import "exec_copy.baga"
 import "exec_vacuum.baga"
 import "std/str/str.baga"
 
-// pc_mu=0 → unlocked (tests / single-thread). Serve passes per-db mutex.
+// pc_mu=0 → unlocked (tests / single-thread). Serve passes per-db mutex (P46).
 fn boila_exec_sql(s: BoilaStore, txn: BoilaTxn, db: str, sql: str, pc: BoilaPlanCache) -> BoilaSqlOut !IO !Time !Par {
     let guc: Map<str, str> = map_new()
     return boila_exec_sql_mu(s, txn, db, sql, pc, 0, guc)?
@@ -151,12 +151,12 @@ fn boila_exec_sql_mu(s: BoilaStore, txn: BoilaTxn, db: str, sql: str, pc: BoilaP
             return boila_sql_fail(s, txn, pc, "невалиден VALUES", "42601")
         }
         // P42: compiled point path (SELECT … FROM t WHERE pk = lit)
-        let pt = boila_try_exec_point(s, txn, pc, lx)?
+        let pt = boila_try_exec_point(s, txn, pc, lx, pc_mu)?
         if pt.hit == 1 { return pt.out }
         let hit = boila_pc_get_mu(pc, sql, pc_mu)?
         if hit.hit == 1 {
             // P35: таблицата идва от catalog кеша на pc (0 GET-ове при hit).
-            let cth = boila_pc_cat(pc, s, txn, hit.plan.sel.table)?
+            let cth = boila_pc_cat_mu(pc, s, txn, hit.plan.sel.table, pc_mu)?
             s = cth.s
             if cth.ok == 0 { return boila_sql_fail(s, txn, pc, cth.err, cth.state) }
             let ex = boila_exec_select(s, txn, cth.table, hit.plan.sel)?
@@ -165,7 +165,7 @@ fn boila_exec_sql_mu(s: BoilaStore, txn: BoilaTxn, db: str, sql: str, pc: BoilaP
         // P41: shape cache — заявки с точно един вариращ литерал.
         let shk = boila_shape_key(lx)
         if shk.nph == 1 {
-            let sh = boila_pc_sget(pc, shk.key)
+            let sh = boila_pc_sget_mu(pc, shk.key, pc_mu)?
             if sh.hit == 1 && sh.plan.sub_field > 0 {
                 let lv = boila_ps_literal(lx, shk.tok_ix)
                 if lv.ok == 1 && lv.param == 0 {
@@ -173,7 +173,7 @@ fn boila_exec_sql_mu(s: BoilaStore, txn: BoilaTxn, db: str, sql: str, pc: BoilaP
                     if sh.plan.sub_field == 1 { sel2.pk_eq = lv.v }
                     if sh.plan.sub_field == 2 { sel2.pk_lo = lv.v }
                     if sh.plan.sub_field == 3 { sel2.pk_hi = lv.v }
-                    let cts = boila_pc_cat(pc, s, txn, sel2.table)?
+                    let cts = boila_pc_cat_mu(pc, s, txn, sel2.table, pc_mu)?
                     s = cts.s
                     if cts.ok == 0 { return boila_sql_fail(s, txn, pc, cts.err, cts.state) }
                     let ex2 = boila_exec_select(s, txn, cts.table, sel2)?
@@ -183,13 +183,13 @@ fn boila_exec_sql_mu(s: BoilaStore, txn: BoilaTxn, db: str, sql: str, pc: BoilaP
         }
         let ps = boila_parse_select(lx)
         if ps.ok == 0 { return boila_sql_fail(s, txn, pc, ps.err, ps.state) }
-        let ct = boila_pc_cat(pc, s, txn, ps.sel.table)?
+        let ct = boila_pc_cat_mu(pc, s, txn, ps.sel.table, pc_mu)?
         s = ct.s
         if ct.ok == 0 { return boila_sql_fail(s, txn, pc, ct.err, ct.state) }
         let sel = boila_knn_prep_sel(ct.table, ps.sel)
         // P41: shape put — точно един placeholder, падaщ в pk_eq/lo/hi
         // (проверено по стойност чрез boila_ps_literal).
-        if shk.nph == 1 && map_len(pc.sm) < 4096 {
+        if shk.nph == 1 && boila_pc_slen_mu(pc, pc_mu)? < 4096 {
             let lv2 = boila_ps_literal(lx, shk.tok_ix)
             if lv2.ok == 1 && lv2.param == 0 {
                 let mut subf: i64 = 0
@@ -203,7 +203,7 @@ fn boila_exec_sql_mu(s: BoilaStore, txn: BoilaTxn, db: str, sql: str, pc: BoilaP
                     let ps3 = boila_parse_select(lx3)
                     if ps3.ok == 1 {
                         let sel3 = boila_knn_prep_sel(ct.table, ps3.sel)
-                        boila_pc_sput(pc, substr(shk.key, 0, len(shk.key)), BoilaSelPlan { sel: sel3, table: boila_cat_empty_table(), sub_field: subf, sub_tok: shk.tok_ix })
+                        boila_pc_sput_mu(pc, substr(shk.key, 0, len(shk.key)), BoilaSelPlan { sel: sel3, table: boila_cat_empty_table(), sub_field: subf, sub_tok: shk.tok_ix }, pc_mu) catch !Par => 0
                     }
                     mem_persist_end()
                 }
@@ -235,7 +235,7 @@ fn boila_exec_sql_mu(s: BoilaStore, txn: BoilaTxn, db: str, sql: str, pc: BoilaP
             }
             li = li + 1
         }
-        if cacheable && map_len(pc.m) < 4096 {
+        if cacheable && boila_pc_mlen_mu(pc, pc_mu)? < 4096 {
             // MEM-4: кешът преживява per-request rewind — кешираната копия е
             // re-parse + ключ в persist региона (чисти операции, без ?);
             // изпълнението на тази заявка ползва ephemeral копието (sel).
@@ -244,7 +244,7 @@ fn boila_exec_sql_mu(s: BoilaStore, txn: BoilaTxn, db: str, sql: str, pc: BoilaP
             let ps2 = boila_parse_select(lx2)
             if ps2.ok == 1 {
                 let sel2 = boila_knn_prep_sel(ct.table, ps2.sel)
-                boila_pc_put(pc, substr(sql, 0, len(sql)), BoilaSelPlan { sel: sel2, table: boila_cat_empty_table(), sub_field: 0, sub_tok: 0 })
+                boila_pc_put_mu(pc, substr(sql, 0, len(sql)), BoilaSelPlan { sel: sel2, table: boila_cat_empty_table(), sub_field: 0, sub_tok: 0 }, pc_mu) catch !Par => 0
             }
             mem_persist_end()
         }

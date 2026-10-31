@@ -27,6 +27,15 @@ fn boila_mt_db_st(pack: i64, db: str) -> i64 !Par {
     return st
 }
 
+// P46: plan/catalog cache mutex = per-db state mutex. Кратки критични
+// секции; DDL пътят подава st=0 (exclusive lock, няма конкуренция).
+fn boila_mt_pc_mu(st: i64) -> i64 {
+    if st == 0 {
+        return 0
+    }
+    return cell2_0(st)
+}
+
 // Compat: exclusive mutex inside the state pack.
 fn boila_mt_db_mu(pack: i64, db: str) -> i64 !Par {
     return cell2_0(boila_mt_db_st(pack, db)?)

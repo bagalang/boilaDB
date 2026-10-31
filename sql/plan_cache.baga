@@ -97,6 +97,87 @@ fn boila_pc_cat(pc: BoilaPlanCache, s: BoilaStore, txn: BoilaTxn, name: str) -> 
     return ct
 }
 
+// MT: кратки заключвания около трите Map-а (mu=0 → unlocked / tests).
+// boila_pc_cat_mu НЕ държи mu по време на I/O: miss-ът резолвва извън
+// ключалката и после вмъква под нея (idempotent; DDL е exclusive и не
+// може да инвалидира по средата на заявка).
+fn boila_pc_sget_mu(pc: BoilaPlanCache, key: str, mu: i64) -> BoilaPcGet !Par {
+    if mu != 0 {
+        mutex_lock(mu)
+    }
+    let r = boila_pc_sget(pc, key)
+    if mu != 0 {
+        mutex_unlock(mu)
+    }
+    return r
+}
+
+fn boila_pc_sput_mu(pc: BoilaPlanCache, key: str, plan: BoilaSelPlan, mu: i64) -> i64 !Par {
+    if mu != 0 {
+        mutex_lock(mu)
+    }
+    boila_pc_sput(pc, key, plan)
+    if mu != 0 {
+        mutex_unlock(mu)
+    }
+    return 0
+}
+
+fn boila_pc_mlen_mu(pc: BoilaPlanCache, mu: i64) -> i64 !Par {
+    if mu != 0 {
+        mutex_lock(mu)
+    }
+    let n = map_len(pc.m)
+    if mu != 0 {
+        mutex_unlock(mu)
+    }
+    return n
+}
+
+fn boila_pc_slen_mu(pc: BoilaPlanCache, mu: i64) -> i64 !Par {
+    if mu != 0 {
+        mutex_lock(mu)
+    }
+    let n = map_len(pc.sm)
+    if mu != 0 {
+        mutex_unlock(mu)
+    }
+    return n
+}
+
+fn boila_pc_cat_mu(pc: BoilaPlanCache, s: BoilaStore, txn: BoilaTxn,
+                   name: str, mu: i64) -> BoilaCatRes !IO !Time !Par {
+    if mu != 0 {
+        mutex_lock(mu)
+    }
+    if map_has(pc.tm, name) == 1 {
+        let t = map_get(pc.tm, name)
+        if mu != 0 {
+            mutex_unlock(mu)
+        }
+        return BoilaCatRes { s: s, ok: 1, err: "", state: "", table: t, id: t.id }
+    }
+    if mu != 0 {
+        mutex_unlock(mu)
+    }
+    mem_persist_begin()
+    let ct = boila_cat_by_name_txn(s, txn, name)
+        catch !IO => BoilaCatRes { s: s, ok: 0, err: "catalog io", state: "XX000", table: boila_cat_empty_table(), id: 0 }
+        catch !Time => BoilaCatRes { s: s, ok: 0, err: "catalog io", state: "XX000", table: boila_cat_empty_table(), id: 0 }
+        catch !Par => BoilaCatRes { s: s, ok: 0, err: "catalog io", state: "XX000", table: boila_cat_empty_table(), id: 0 }
+    if ct.ok == 1 {
+        if mu != 0 {
+            mutex_lock(mu)
+        }
+        map_set(pc.tm, substr(name, 0, len(name)), ct.table)
+        if mu != 0 {
+            mutex_unlock(mu)
+        }
+    }
+    mem_persist_end()
+    return ct
+}
+
 // MT: brief lock around Map touch (mu=0 → unlocked / tests).
 fn boila_pc_get_mu(pc: BoilaPlanCache, sql: str, mu: i64) -> BoilaPcGet !Par {
     if mu != 0 {

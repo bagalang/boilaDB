@@ -306,6 +306,10 @@ cell2 пакети (доказаният модел на rocksbaga MT и queueba
   lock. `boila_pc_cat_mu` резолвва miss извън ключалката и вмъква под нея;
   DDL инвалидира при exclusive lock. Така няколко SELECT worker-а не
   правят едновременен `map_set` върху един и същ Map.
+- **Mux wake върху pipe (P47):** idle fd-овете се будят с `fd_write` в
+  `pipe2`; `tcp_write`/`sendto` даваше `ENOTSOCK`, wake-ът се губеше и
+  всяка заявка чакаше 200 ms poll timeout (5 tps/връзка). След fix-а
+  point SELECT стига ~151k tps @ c=16 на 12-thread машина.
 - **Commit sequencer:** издава LSN-и за multi-shard commit-и; едно-shard
   commit-и (масовият случай) не го чакат.
 - **MVCC четене:** worker-ите четат без ключалки върху snapshot LSN;

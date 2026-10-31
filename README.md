@@ -60,6 +60,7 @@ does not take the registry mutex for stats/admission. PG wire TLS 1.3 when
 | ORM | [ormbaga](../ormbaga/README.md) **36/36** vs `serve_pg` (with and without `--rc`) |
 | Point @10k | 156k ops/s |
 | pgbench -S (4 workers) | **15.2k / 51.6k / 89.1k / 109.1k tps** @ c=1/4/8/16 (P43 dual get) |
+| pgbench point SELECT, 5k rows (P47) | **15.6k / 53.4k / 97.6k / 151.5k tps** @ c=1/4/8/16; +65% vs local PostgreSQL @ c=16 |
 | Insert @10k | 678 ops/s durable (P27); **3134** with `BOILA_SYNC_EVERY=64` (P30) |
 | Mix 80/20 @10k | 1.6k ops/s (2 shards) / 2.2k (4 shards) |
 | 1M INSERT | 169 s, 1.35 GB RSS, DURABLE OK |

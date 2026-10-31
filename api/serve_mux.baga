@@ -2,6 +2,7 @@
 // Idle fds sit in poll; a worker runs one turn then parks the fd.
 
 import "std/net/tcp.baga"
+import "std/os/os.baga"
 import "std/str/str.baga"
 
 fn boila_mux_i32le(s: str, off: i64) -> i64 {
@@ -49,7 +50,10 @@ fn boila_mux_vec_drop(fds: Vec<i64>, fd: i64) -> Vec<i64> {
 }
 
 fn boila_mux_wake(wfd: i64) -> i64 !Net !IO {
-    let _w = tcp_write(wfd, "w") catch !Net => 0 catch !IO => 0
+    // P47: wfd е pipe2, не socket. tcp_write ползва sendto → ENOTSOCK и
+    // catch-ът го гълташе, значи worker wake-ът никога не стигаше до
+    // poll-а; всяка заявка чакаше целия 200 ms timeout (5 tps на връзка).
+    let _w = fd_write(wfd, "w") catch !IO => 0
     return 0
 }
 

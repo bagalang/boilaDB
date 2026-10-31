@@ -189,7 +189,7 @@ fn boila_exec_sql_mu(s: BoilaStore, txn: BoilaTxn, db: str, sql: str, pc: BoilaP
         let sel = boila_knn_prep_sel(ct.table, ps.sel)
         // P41: shape put — точно един placeholder, падaщ в pk_eq/lo/hi
         // (проверено по стойност чрез boila_ps_literal).
-        if shk.nph == 1 && boila_pc_slen_mu(pc, pc_mu)? < 4096 {
+        if shk.nph == 1 && boila_pc_slen_mu(pc, pc_mu)? < boila_pc_cap() {
             let lv2 = boila_ps_literal(lx, shk.tok_ix)
             if lv2.ok == 1 && lv2.param == 0 {
                 let mut subf: i64 = 0
@@ -213,7 +213,7 @@ fn boila_exec_sql_mu(s: BoilaStore, txn: BoilaTxn, db: str, sql: str, pc: BoilaP
         // че всяка нова стойност (pgbench aid=…) прави нов ключ: persist
         // регионът расте безгранично (~0.5 GB на 76k заявки) и се плаща
         // двоен parse за ~0% hit rate. Без литерали кешът е смислен.
-        // Таван 4096 записа: пълен кеш → просто не пълним (DDL invalidate
+        // Таван boila_pc_cap(): пълен кеш → просто не пълним (DDL invalidate
         // го чисти); не fork-ваме картата локално.
         let mut cacheable = true
         let mut li: i64 = 0
@@ -235,7 +235,7 @@ fn boila_exec_sql_mu(s: BoilaStore, txn: BoilaTxn, db: str, sql: str, pc: BoilaP
             }
             li = li + 1
         }
-        if cacheable && boila_pc_mlen_mu(pc, pc_mu)? < 4096 {
+        if cacheable && boila_pc_mlen_mu(pc, pc_mu)? < boila_pc_cap() {
             // MEM-4: кешът преживява per-request rewind — кешираната копия е
             // re-parse + ключ в persist региона (чисти операции, без ?);
             // изпълнението на тази заявка ползва ephemeral копието (sel).

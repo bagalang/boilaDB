@@ -35,6 +35,11 @@ struct BoilaPcGet {
     plan: BoilaSelPlan
 }
 
+// P67: по-стегнат таван на persist plan/shape кеша. 4096 големи плана
+// правеха стотици MB при много различни заявки; 256 стига за реалните
+// горещи форми и пази паметта bounded.
+fn boila_pc_cap() -> i64 { return 256 }
+
 fn boila_pc_new() -> BoilaPlanCache {
     let m: Map<str, BoilaSelPlan> = map_new()
     let sm: Map<str, BoilaSelPlan> = map_new()

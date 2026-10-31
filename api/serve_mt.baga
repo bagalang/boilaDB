@@ -50,14 +50,24 @@ fn boila_mt_new(srv: BoilaServer, max_conn: i64) -> i64 !Par {
         mc = 1
     }
     let pcs: Map<str, BoilaPlanCache> = map_new()
-    // W2.15/P44: stats И live conn живеят в замразен свят с атомарни
-    // wcache_add броячи. Така нито заявка, нито accept/close взимат gmu.
-    let sw = world_new()
-    world_freeze(sw)
+    // W2.15/P44/P65: SQL броячите са в 8 shard-а (frozen worlds), за да
+    // няма един wcache mutex на всяка заявка; live conn/config са шард 0.
+    let reg = world_new()
+    let v = wvec_new(reg)
+    let mut si: i64 = 0
+    while si < 8 {
+        let sh = world_new()
+        world_freeze(sh)
+        wvec_push(reg, v, sh)
+        si = si + 1
+    }
+    wcache_set(reg, 0, v)
+    world_freeze(reg)
+    let sw = wvec_get(reg, v, 0)
     wcache_set(sw, boila_live_max_k(), mc)
     wcache_set(sw, boila_live_workers_k(), 0)
     wcache_set(sw, boila_live_mode_k(), 0)
-    return boila_mt_pack(mutex_new(), map_h(sm), map_h(dm), map_h(pcs), sw)
+    return boila_mt_pack(mutex_new(), map_h(sm), map_h(dm), map_h(pcs), reg)
 }
 
 fn boila_mt_db_ok(pack: i64, db: str) -> i64 !IO !Time !Par {

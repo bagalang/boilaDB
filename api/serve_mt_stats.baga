@@ -1,42 +1,26 @@
 // serve_mt_stats.baga — M1 stats + live conn + open/max db counters.
-// Всичко под gmu; pack accessors-те са в serve_mt_pack.baga.
+// P44/W2.15: SQL/HTTP/PG броячите са в замразен свят (wcache_add) — без gmu
+// по горещия път. Live conn / open db остават под gmu (рядко, registry).
+// pack accessors-те са в serve_mt_pack.baga.
 
 import "serve_mt_pack.baga"
 import "../server/databases.baga"
 
-fn boila_mt_stat_inc(pack: i64, key: i64) -> i64 !Par {    let gmu = boila_mt_gmu(pack)
-    mutex_lock(gmu)
-    let st: Map<i64, i64> = h_map(boila_mt_stats_h(pack))
-    let mut n: i64 = 0
-    if map_has(st, key) == 1 { n = map_get(st, key) }
-    map_set(st, key, n + 1)
-    mutex_unlock(gmu)
+fn boila_mt_stat_inc(pack: i64, key: i64) -> i64 !Par {
+    wcache_add(boila_mt_stats_w(pack), key, 1)
     return 0
 }
 
-// P34: няколко брояча с ЕДНО вземане на gmu (беше по едно на брояч).
+// Два брояча без gmu; всеки add е атомарен под wlock-а на кеша.
 fn boila_mt_stat_inc2(pack: i64, k1: i64, k2: i64) -> i64 !Par {
-    let gmu = boila_mt_gmu(pack)
-    mutex_lock(gmu)
-    let st: Map<i64, i64> = h_map(boila_mt_stats_h(pack))
-    let mut n1: i64 = 0
-    if map_has(st, k1) == 1 { n1 = map_get(st, k1) }
-    map_set(st, k1, n1 + 1)
-    let mut n2: i64 = 0
-    if map_has(st, k2) == 1 { n2 = map_get(st, k2) }
-    map_set(st, k2, n2 + 1)
-    mutex_unlock(gmu)
+    let sw = boila_mt_stats_w(pack)
+    wcache_add(sw, k1, 1)
+    wcache_add(sw, k2, 1)
     return 0
 }
 
 fn boila_mt_stat_get(pack: i64, key: i64) -> i64 !Par {
-    let gmu = boila_mt_gmu(pack)
-    mutex_lock(gmu)
-    let st: Map<i64, i64> = h_map(boila_mt_stats_h(pack))
-    let mut n: i64 = 0
-    if map_has(st, key) == 1 { n = map_get(st, key) }
-    mutex_unlock(gmu)
-    return n
+    return wcache_get(boila_mt_stats_w(pack), key)
 }
 
 fn boila_mt_note_sql(pack: i64, ok: i64) -> i64 !Par {

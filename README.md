@@ -48,7 +48,9 @@ Concurrent HTTP + PG:
 bounded `BOILA_WORKERS` pool (default 4; `=0` → `go_bg` per conn;
 idle keep-alive HTTP + PG is multiplexed onto the pool),
 hop-less per-shard stores, shared per-db plan cache. Data SQL is a
-shared lock; schema DDL is exclusive per database. PG wire TLS 1.3 when
+shared lock; schema DDL is exclusive per database. SQL/HTTP/PG counters
+live in a frozen world (`wcache_add`) — the hot path does not take the
+registry mutex for stats. PG wire TLS 1.3 when
 `BOILA_TLS_CERT`/`BOILA_TLS_KEY` are set (P22-3).
 
 | Surface | Result |
